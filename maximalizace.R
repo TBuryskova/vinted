@@ -2,15 +2,16 @@ library(ggplot2)
 library(rootSolve)
 library(tidyverse)
 # Parameters
-sigma_pl <- 6
+sigma_pl <- 3
 gamma <- 0.6
-lambda <- 0.1
+lambda <- 0.2
+epsilon <- 3
+
 
 # Expected utilities
 E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
 E_CZ <- -exp(gamma^2 / 2)
 delta <- E_PL - E_CZ
-epsilon <- -(E_PL+E_CZ)/2
 
 
 
@@ -19,15 +20,17 @@ p_grid <- seq(0.01, 0.99, length.out = 100)
 
 expected_util <- function(r) {
   # stage-2 utility after observing posterior belief r
-  r*pmax(r * E_PL,-epsilon) + (1-r)*pmax((1 - r) * E_CZ, -epsilon)
+pmax((1-r)*E_CZ+r*E_PL,-epsilon)
+  
 }
 
+H         <- function(p) {-p * log(p) - (1-p) * log(1 - p)}
+
+
 info_cost <- function(r, p) {
-  if (r <= 0 || r >= 1 || p <= 0 || p >= 1) {
-    return(Inf)  # high cost = strongly penalized = avoided
-  }
-  # per-posterior Shannon cost used earlier
-  -lambda * (log((r^(r) / p^p)) -log((1-r)^(1-r) / (1-p)^(1-p))) }
+H(p)-H(r)
+}
+
 
 V_RI <- function(r, p) {
 expected_util(r) -info_cost(r, p)}
@@ -51,9 +54,8 @@ r_star  <- sapply(p_grid, solve_r_star)
 # Value functions
 V_no_info   <- expected_util(p_grid)
 V_full_info <- -p_grid *  epsilon + (1 - p_grid) * (E_CZ)           # blue
-H_p         <- -p_grid * log(p_grid) - (1 - p_grid) * log(1 - p_grid)
 
-V_perfect   <- pmax(-lambda * info_cost(1,p_grid) + (-p_grid * epsilon + (1 - p_grid) * E_CZ), V_no_info) # purple
+V_perfect   <- pmax(-lambda * H(p_grid) + (-p_grid * epsilon + (1 - p_grid) * E_CZ), V_no_info) # purple
 V_ri        <- mapply(function(r, p) V_RI(r, p), r_star, p_grid)     # green
 
 
