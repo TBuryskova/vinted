@@ -1,9 +1,9 @@
-## app.R
-# Shiny app: expected‑utility curves under different information structures
-# Sliders control σ_PL, γ, λ, ε and the graph recomputes instantly.
+# Shiny app: expected-utility curves and optimal posteriors under RI
+# Sliders control σ_PL, γ, λ, ε and both graphs recompute instantly.
 # -------------------------------------------------------------------------
 
 library(shiny)
+library(tidyverse)
 library(ggplot2)
 
 # ---------- Helper math ----------------------------------------------------
@@ -12,11 +12,16 @@ expected_util <- function(r, E_PL, E_CZ, epsilon) {
 }
 
 H <- function(x) {
-  -x * log(x) - (1 - x) * log(1 - x)
+  result <- -x * log(x) - (1 - x) * log(1 - x)
+  result[is.nan(result) | is.infinite(result)] <- 0
+  result
 }
 
-info_cost <- function(r, p, lambda) {
-  lambda * (H(p) - H(r))
+info_cost <- function(r, p, lambda){
+  result <-  case_when(lambda * (H(p) - H(r))>0 ~ lambda * (H(p) - H(r)),
+                       TRUE ~ 10000000)
+  result
+  
 }
 
 V_RI_scalar <- function(r, p, E_PL, E_CZ, epsilon, lambda) {
@@ -71,6 +76,7 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 100) {
       value = c(V_no_info, V_full_info, V_perfect, V_ri),
       type  = rep(c("No info", "Full info", "Perfect signal", "RI optimal"), each = n_grid)
     ),
+    r_star_df = data.frame(p = p_grid, r_star = r_star),
     E_PL = E_PL,
     E_CZ = E_CZ
   )
@@ -87,7 +93,9 @@ ui <- fluidPage(
       uiOutput("epsilon_slider")
     ),
     mainPanel(
-      plotOutput("curvePlot", height = "550px")
+      plotOutput("curvePlot", height = "500px"),
+      tags$br(),
+      plotOutput("rStarPlot", height = "350px")
     )
   )
 )
@@ -130,7 +138,18 @@ server <- function(input, output, session) {
       theme_minimal() +
       theme(legend.position = "bottom")
   }, res = 96)
+  
+  output$rStarPlot <- renderPlot({
+    ggplot(curves()$r_star_df, aes(x = p, y = r_star)) +
+      geom_line(linewidth = 1, colour = "steelblue", alpha = 0.9) +
+      labs(
+        x = "Prior p (probability PL)",
+        y = expression(r["*"](p)),
+        title = "Optimal posterior r* for each p"
+      ) +
+      ylim(0,1) +
+      theme_minimal()
+  }, res = 96)
 }
-shinyApp(ui, server)
 
-            
+shinyApp(ui, server)
