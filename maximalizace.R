@@ -1,87 +1,116 @@
 library(ggplot2)
 library(rootSolve)
 library(tidyverse)
+library(stats)
+
 # Parameters
-sigma_pl <- 2
+sigma_pl <- 3
 gamma <- 0.6
 lambda <- 1
 epsilon <- 3
 
 
+
 # Expected utilities
 E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
 E_CZ <- -exp(gamma^2 / 2)
-delta <- E_PL - E_CZ
-
+epsilon <- abs(E_PL+E_CZ)/2
 
 
 # Grid of prior beliefs
 p_grid <- seq(0.01, 0.99, length.out = 100)
 # ── Helper functions ────────────────────────────────────────────────────────
-expected_util <- function(r, E_PL, E_CZ, epsilon) {
+expected_util <- function(r, gamma, sigma_pl, epsilon) {
+  E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
+  E_CZ <- -exp(gamma^2 / 2)
+  epsilon <- abs(E_PL+E_CZ)/2
+  
   pmax((1 - r) * E_CZ + r * E_PL, -epsilon)
 }
 
+
+objective <- function(a, p, gamma, sigma_pl, epsilon, lambda) {
+  E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
+  E_CZ <- -exp(gamma^2 / 2)
+  epsilon <- abs(E_PL+E_CZ)/2
+  
+
+  # Expected utility
+  EU <- p * (a * E_PL + (1 - a) * (-epsilon)) + 
+    (1 - p) * ((1-a)* E_CZ + (1 - (1-a)) * (-epsilon))
+  
+  # Joint probabilities
+  f_PL1 <- p * a
+  f_PL0 <- p * (1 - a)
+  f_CZ1 <- (1 - p) * (1-a)
+  f_CZ0 <- (1 - p) * (1 - (1-a))
+  
+  f_y1 <- f_PL1 + f_CZ1
+  f_y0 <- f_PL0 + f_CZ0
+  
+  # Mutual Information
+  I <- 0
+  if (f_PL1 > 0) I <- I + f_PL1 * log(f_PL1 / (p * f_y1))
+  if (f_PL0 > 0) I <- I + f_PL0 * log(f_PL0 / (p * f_y0))
+  if (f_CZ1 > 0) I <- I + f_CZ1 * log(f_CZ1 / ((1 - p) * f_y1))
+  if (f_CZ0 > 0) I <- I + f_CZ0 * log(f_CZ0 / ((1 - p) * f_y0))
+  
+  return(EU - lambda * I)
+}
 H <- function(x) {
-  result <- -x * log(x) - (1 - x) * log(1 - x)
-  result[is.nan(result) | is.infinite(result)] <- 0
-  result
+  -x*log(x)-(1-x)*log(1-x)
 }
 
-info_cost <- function(r, p, lambda){
-  result <-  case_when(lambda * (H(p) - H(r))>0 ~ lambda * (H(p) - H(r)),
-                       TRUE ~ NA)
-  result
+
+
+solve_ab <- function(p, gamma, epsilon, lambda, sigma_pl) {
+  E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
+  E_CZ <- -exp(gamma^2 / 2)
   
-  }
-V_RI <- function(r, p, E_PL, E_CZ, epsilon, lambda) {
+  res <- optimize(
+    maximum = TRUE,
+    f = objective,
+    lower = 0,
+    upper = 1,
+    p = p,
+    gamma = gamma,
+    sigma_pl = sigma_pl,
+    epsilon = epsilon,
+    lambda = lambda
+  )
   
-  
-  expected_util(r, E_PL, E_CZ, epsilon) - info_cost(r, p, lambda)
+  return(res)  # res$maximum is optimal a, res$objective is optimal value
 }
 
-# ── Root-finding for r* ─────────────────────────────────────────────────────
-solve_r_star <- function(p, E_PL, E_CZ, epsilon, lambda) {
-  optimize(
-    f        = V_RI,
-    interval = c(1e-6, 1 - 1e-6),
-    maximum  = TRUE,
-    p        = p,
-    E_PL     = E_PL,
-    E_CZ     = E_CZ,
-    epsilon  = epsilon,
-    lambda   = lambda
-  )$maximum
-}
 
-r_star <- vapply(
+
+V_RI <- vapply(
   p_grid,
-  function(p) solve_r_star(p, E_PL, E_CZ, epsilon, lambda),
+  function(p) solve_ab(p = p, gamma=gamma, epsilon = epsilon, lambda = lambda, sigma_pl=sigma_pl)$objective,
   numeric(1)
-)
+  )
 
-# ── Value functions (now using the new helpers) ─────────────────────────────
-V_no_info   <- expected_util(p_grid, E_PL, E_CZ, epsilon)
+
+
+
+
+# ── Value functions ─────────────────────────────
+V_no_info   <- expected_util(p_grid, gamma, sigma_pl, epsilon)
 V_full_info <- -p_grid * epsilon + (1 - p_grid) * E_CZ
 V_perfect   <- pmax(
   -lambda * H(p_grid) + (-p_grid * epsilon + (1 - p_grid) * E_CZ),
   V_no_info
 )
-V_ri <- mapply(
-  function(r, p) V_RI(r, p, E_PL, E_CZ, epsilon, lambda),
-  r_star, p_grid
-)
+
 
 # Assemble dataframe
 df <- data.frame(
   p = rep(p_grid, 4),
-  value = c(V_no_info, V_full_info, V_perfect, V_ri),
-  r_star = r_star,
+  value = c(V_no_info, V_full_info, V_perfect, V_RI),
   type = rep(c("No info",
                "Full info",
                "Perfect signal",
-               "RI optimal"), each = length(p_grid))
-) %>% mutate(  drop_value = pmax(pmin(value,0),E_PL-2))
+               "RI optimal"), each = length(p_grid)))
 
 # Plot
 ggplot(df, aes(x = p, y = value, color = type), alpha=0.1) +
@@ -94,50 +123,3 @@ ggplot(df, aes(x = p, y = value, color = type), alpha=0.1) +
   ) +
   theme_minimal() +
   theme(legend.position = "bottom")
-
-ggplot(df, aes(x = p, y = r_star), alpha=0.1) +
-  geom_line(linewidth = 1) +
-  labs(
-    title = "R star",
-    x = "Prior p (probability of PL)",
-    y = "r"
-  ) +
-  theme_minimal() +
-  ylim(0,1) +
-  theme(legend.position = "bottom")
-
-
-# ── Grid over r and p ──
-r_vals <- seq(0.01, 0.99, length.out = 100)
-p_vals <- seq(0.01, 0.99, length.out = 100)
-lambda_val <- 1
-
-# ── Compute values on grid ──
-df <- expand.grid(r = r_vals, p = p_vals) %>%
-  mutate(cost = info_cost(r, p, lambda_val), U=expected_util(r, E_PL, E_CZ, epsilon))
-
-# ── Plot ──
-library(ggplot2)
-
-ggplot(df, aes(x = p, y = r, fill = cost)) +
-  geom_tile() +
-  scale_fill_viridis_c() +
-  labs(
-    title = paste0("Information Cost: λ = ", lambda_val),
-    x = "Prior belief p",
-    y = "Posterior belief r",
-    fill = "Cost"
-  ) +
-  theme_minimal()
-
-ggplot(df, aes(x = p, y = r, fill = U)) +
-  geom_tile() +
-  scale_fill_viridis_c() +
-  labs(
-    title = paste0("U: λ = ", lambda_val),
-    x = "Prior belief p",
-    y = "Exp. util",
-    fill = "Cost"
-  ) +
-  theme_minimal()
-
