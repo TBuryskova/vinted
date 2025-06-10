@@ -97,7 +97,11 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 100) {
   
   a_star_full_info<- vapply(
     p_grid,
+<<<<<<< HEAD
     function(p) 1-p,
+=======
+    function(p) p,
+>>>>>>> e0cb263c7a017bfeab870019000eaf64b3e5f824
     numeric(1)
     
   )
@@ -107,7 +111,11 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 100) {
   a_star_perfect <-  mapply(
     function(p, v_no) {
       signal_aq <- as.numeric(-lambda * H(p) + (-p * epsilon + (1 - p) * E_CZ) >= v_no)
+<<<<<<< HEAD
       signal_aq * (1-p) + (1-signal_aq)*(p*E_PL+(1-p)*E_CZ>-epsilon)
+=======
+      signal_aq * p + (1-signal_aq)*(p*E_PL+(1-p)*E_CZ>-epsilon)
+>>>>>>> e0cb263c7a017bfeab870019000eaf64b3e5f824
     },
     p_grid, V_no_info
   )
