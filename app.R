@@ -60,6 +60,7 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 1000) {
   E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
   E_CZ <- -exp(gamma^2 / 2)
   p_grid <- seq(0.001, 0.999, length.out = n_grid)
+
   
   V_no_info <- expected_util(p_grid, gamma = gamma, sigma_pl = sigma_pl, epsilon = epsilon)
   V_full_info <- -p_grid * epsilon + (1 - p_grid) * E_CZ
@@ -215,7 +216,11 @@ server <- function(input, output, session) {
   output$buyPlot <- renderPlot({
     ggplot(curves()$df, aes(x = p, y = buy, colour = type)) +
       geom_line(linewidth = 1, alpha = 0.8) +
+<<<<<<< HEAD
       labs(x = "Prior p (probability PL)", y = "Probability of Buying", colour = "Scenario", title="Probability of buying") +
+=======
+      labs(x = "Prior p (probability PL)", y = "Probability of Buying", colour = "Scenario") +
+>>>>>>> a2caf07d0867e4849aed0acffaca06e42fc3305d
       theme_minimal() +
       theme(legend.position = "bottom")
   })
