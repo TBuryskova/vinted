@@ -15,33 +15,40 @@ expected_util <- function(r, gamma, sigma_pl, epsilon) {
 }
 
 
-objective <- function(a, p, gamma, sigma_pl, epsilon, lambda) {
+objective <- function(params, p, gamma, sigma_pl, lambda) {
+  a <- params[1]  # P(y = 1 | PL)
+  b <- params[2]  # P(y = 1 | CZ)
+  
+  # Expected utilities in each state
   E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
   E_CZ <- -exp(gamma^2 / 2)
-  epsilon <- abs(E_PL+E_CZ)/2
+  epsilon <- abs(E_PL + E_CZ) / 2
   
   # Expected utility
   EU <- p * (a * E_PL + (1 - a) * (-epsilon)) + 
-    (1 - p) * ((1-a)* E_CZ + (1 - (1-a)) * (-epsilon))
+    (1 - p) * (b * E_CZ + (1 - b) * (-epsilon))
   
   # Joint probabilities
   f_PL1 <- p * a
   f_PL0 <- p * (1 - a)
-  f_CZ1 <- (1 - p) * (1-a)
-  f_CZ0 <- (1 - p) * (1 - (1-a))
+  f_CZ1 <- (1 - p) * b
+  f_CZ0 <- (1 - p) * (1 - b)
   
+  # Marginal probabilities
   f_y1 <- f_PL1 + f_CZ1
   f_y0 <- f_PL0 + f_CZ0
   
-  # Mutual Information
+  # Mutual information
   I <- 0
   if (f_PL1 > 0) I <- I + f_PL1 * log(f_PL1 / (p * f_y1))
   if (f_PL0 > 0) I <- I + f_PL0 * log(f_PL0 / (p * f_y0))
   if (f_CZ1 > 0) I <- I + f_CZ1 * log(f_CZ1 / ((1 - p) * f_y1))
   if (f_CZ0 > 0) I <- I + f_CZ0 * log(f_CZ0 / ((1 - p) * f_y0))
   
-  return(EU - lambda * I)
+  # Return minus net utility
+  return(-EU+lambda * I)
 }
+
 H <- function(x) {
   -x*log(x)-(1-x)*log(1-x)
 }
@@ -50,19 +57,19 @@ solve_ab <- function(p, gamma, epsilon, lambda, sigma_pl) {
   E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
   E_CZ <- -exp(gamma^2 / 2)
   
-  res <- optimize(
-    maximum = TRUE,
-    f = objective,
-    lower = 0.0001,
-    upper = 0.9999,
+  res <- optim(
+    par = c(0.5, 0.5),  
+    fn = objective,
     p = p,
     gamma = gamma,
+    method= "L-BFGS-B",
     sigma_pl = sigma_pl,
-    epsilon = epsilon,
-    lambda = lambda
+    lambda = lambda,
+    lower = c(0, 0),
+    upper = c(1, 1)
   )
   
-  return(res)  # res$maximum is optimal a, res$objective is optimal value
+  return(res) 
 }
 
 compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 100) {
@@ -77,42 +84,45 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 100) {
   V_full_info <- -p_grid * epsilon + (1 - p_grid) * E_CZ
   V_perfect   <- pmax(-lambda * H(p_grid) + (-p_grid * epsilon + (1 - p_grid) * E_CZ), V_no_info)
   
-  V_RI <- vapply(
+  V_RI <- mapply(
+    function(p) {-(solve_ab(p = p, gamma=gamma, epsilon = epsilon, lambda = lambda, sigma_pl=sigma_pl)$value)},
+    p_grid
+  )
+  
+  a_star_RI <- vapply(
     p_grid,
-    function(p) solve_ab(p = p, gamma=gamma, epsilon = epsilon, lambda = lambda, sigma_pl=sigma_pl)$objective,
+    function(p) solve_ab(p = p, gamma=gamma, epsilon = epsilon, lambda = lambda, sigma_pl=sigma_pl)$par[1],
     numeric(1)
   )
   
-  a_star_RI0 <- vapply(
+  b_star_RI<- vapply(
     p_grid,
-    function(p) (solve_ab(p = p, gamma=gamma, epsilon = epsilon, lambda = lambda, sigma_pl=sigma_pl)$maximum),
+    function(p) (solve_ab(p = p, gamma=gamma, epsilon = epsilon, lambda = lambda, sigma_pl=sigma_pl)$par[2]),
     numeric(1)
   )
   
-  a_star_RI<- vapply(
-    p_grid,
-    function(p) 2*p*(solve_ab(p = p, gamma=gamma, epsilon = epsilon, lambda = lambda, sigma_pl=sigma_pl)$maximum)+1-p-(solve_ab(p = p, gamma=gamma, epsilon = epsilon, lambda = lambda, sigma_pl=sigma_pl)$maximum),
-    numeric(1)
+  buy_RI <- mapply(
+    function(p, a, b) {p*a+(1-p)*b},
+    p_grid, a_star_RI, b_star_RI
   )
   
-  a_star_no_info <- vapply(
+  
+  buy_no_info <- vapply(
     p_grid,
     function(p) (p*E_PL+(1-p)*E_CZ>-epsilon),
     numeric(1)
     
   )
   
-  a_star_full_info<- vapply(
+  buy_full_info<- vapply(
     p_grid,
     function(p) 1-p,
-
     numeric(1)
-    
   )
   
   
   
-  a_star_perfect <-  mapply(
+  buy_perfect <-  mapply(
     function(p, v_no) {
       signal_aq <- as.numeric(-lambda * H(p) + (-p * epsilon + (1 - p) * E_CZ) >= v_no)
       signal_aq * (1-p) + (1-signal_aq)*(p*E_PL+(1-p)*E_CZ>-epsilon)
@@ -144,12 +154,12 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 100) {
   
   
   info_RI <- mapply(
-    function(p, a) {
+    function(p, a,b) {
       # Joint probabilities
       f_PL1 <- p * a
       f_PL0 <- p * (1 - a)
-      f_CZ1 <- (1 - p) * (1-a)
-      f_CZ0 <- (1 - p) * (1 - (1-a))
+      f_CZ1 <- (1 - p) * b
+      f_CZ0 <- (1 - p) * (1 - b)
       
       f_y1 <- f_PL1 + f_CZ1
       f_y0 <- f_PL0 + f_CZ0
@@ -162,16 +172,15 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 100) {
       if (f_CZ0 > 0) I <- I + f_CZ0 * log(f_CZ0 / ((1 - p) * f_y0))
       return(I)
     },
-    p_grid, a_star_RI
+    p_grid, a_star_RI, b_star_RI
   )  
   
   
   
   # Behavioral discrimination measure
-  behavioral_discrimination_RI <- vapply(
-    a_star_RI0,
-    function(a)  -exp(E_PL+(log(a)-log(1-a)))/exp(E_PL*(log(a)+log(1))+exp(-epsilon))+ exp(E_CZ+(log(a)-log(1-a)))/exp(E_CZ*(log(a)-log(1-a))+exp(-epsilon)),
-    numeric(1)
+  behavioral_discrimination_RI <- mapply(
+    function(a,b) {b-a},
+    a_star_RI, b_star_RI
   )  
   
   behavioral_discrimination_no_info <- vapply(
@@ -204,11 +213,15 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 100) {
       type  = rep(c("No info", "Full info", "Perfect signal", "RI optimal"), each = 100),
       behavioral_discrimination = c(behavioral_discrimination_no_info,behavioral_discrimination_full_info,behavioral_discrimination_perfect,behavioral_discrimination_RI),
       info = c(info_no_info,info_full_info,info_perfect,info_RI),
-      a_star= c(a_star_no_info,a_star_full_info,a_star_perfect,a_star_RI)
-      
+      buy= c(buy_no_info,buy_full_info,buy_perfect,buy_RI)
     ),
     E_PL = E_PL,
-    E_CZ = E_CZ
+    E_CZ = E_CZ,
+    star=data.frame(
+      p=p_grid,
+      a=a_star_RI,
+      b=b_star_RI
+    )
   )
 }
 
@@ -221,16 +234,21 @@ ui <- fluidPage(
       sliderInput("gamma",     "γ",     min = 0.1, max = 2, value = 0.6, step = 0.1),
       sliderInput("lambda",    "λ",     min = 0,   max = 5, value = 1, step = 0.1),
       uiOutput("epsilon_slider")
+      
     ),
     mainPanel(
       fluidRow(
         column(6, plotOutput("curvePlot", height = "400px")),
-        column(6, plotOutput("aStarPlot", height = "400px"))
+        column(6, plotOutput("buyPlot", height = "400px"))
       ),
       fluidRow(
         column(6, plotOutput("discrimPlot", height = "400px")),
         column(6, plotOutput("info_acquired", height = "400px"))
-      )
+      ),
+    fluidRow(
+      column(6, plotOutput("astarplot", height = "400px")),
+      column(6, plotOutput("bstarplot", height = "400px"))
+    )
     )
   )
 )
@@ -276,8 +294,8 @@ server <- function(input, output, session) {
       theme(legend.position = "bottom")
   })
   
-  output$aStarPlot <- renderPlot({
-    ggplot(curves()$df, aes(x = p, y = a_star, colour = type)) +
+  output$buyPlot <- renderPlot({
+    ggplot(curves()$df, aes(x = p, y = buy, colour = type)) +
       geom_line(linewidth = 1, alpha = 0.8) +
       labs(
         x = "Prior p (probability PL)",
@@ -311,6 +329,34 @@ server <- function(input, output, session) {
         y = "Mutual entropy",
         colour = "Scenario",
         title = "Amount of info acquired"
+      ) +
+      theme_minimal() +
+      theme(legend.position = "bottom")
+  })
+  
+  
+  
+  output$astarplot <- renderPlot({
+    ggplot(curves()$star, aes(x = p, y = a)) +
+      geom_line(linewidth = 1, alpha = 0.9) +
+      labs(
+        x = "Prior p (probability PL)",
+        y = "a star",
+        title = "Optimal a=P(buy|PL)"
+      ) +
+      theme_minimal() +
+      theme(legend.position = "bottom")
+  })
+  
+  
+  
+  output$bstarplot <- renderPlot({
+    ggplot(curves()$star, aes(x = p, y = b)) +
+      geom_line(linewidth = 1, alpha = 0.9) +
+      labs(
+        x = "Prior p (probability PL)",
+        y = "a star",
+        title = "Optimal b=P(buy|CZ)"
       ) +
       theme_minimal() +
       theme(legend.position = "bottom")
