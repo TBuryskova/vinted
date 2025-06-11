@@ -227,7 +227,7 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 100) {
 
 # ---------- UI --------------------------------------------------------------
 ui <- fluidPage(
-  titlePanel("Expected Utility under Different Information Structures"),
+  titlePanel("Outcomes under Different Information Structures"),
   sidebarLayout(
     sidebarPanel(
       sliderInput("sigma_pl", "σ_PL", min = 1, max = 5, value = 3, step = 0.1),
