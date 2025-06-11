@@ -60,6 +60,7 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 1000) {
   E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
   E_CZ <- -exp(gamma^2 / 2)
   p_grid <- seq(0.001, 0.999, length.out = n_grid)
+
   
   V_no_info <- expected_util(p_grid, gamma = gamma, sigma_pl = sigma_pl, epsilon = epsilon)
   V_full_info <- -p_grid * epsilon + (1 - p_grid) * E_CZ
