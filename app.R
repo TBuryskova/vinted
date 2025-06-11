@@ -355,7 +355,7 @@ server <- function(input, output, session) {
       geom_line(linewidth = 1, alpha = 0.9) +
       labs(
         x = "Prior p (probability PL)",
-        y = "a star",
+        y = "b star",
         title = "Optimal b=P(buy|CZ)"
       ) +
       theme_minimal() +
