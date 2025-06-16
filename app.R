@@ -6,6 +6,8 @@ library(ggplot2)
 H <- function(x) {
   -x * log(x) - (1 - x) * log(1 - x)
 }
+safe_log <- function(x) log(pmax(x, 1e-10))
+
 
 expected_util <- function(r, gamma, sigma_pl, epsilon) {
   E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
@@ -20,7 +22,7 @@ objective <- function(params, p, gamma, sigma_pl, lambda, epsilon) {
   E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
   E_CZ <- -exp(gamma^2 / 2)
   
-  EU <- p * (a * E_PL + (1 - a) * (-epsilon)) + 
+  EU <- p * (a * E_PL + (1 - a) * (-epsilon)) +
     (1 - p) * (b * E_CZ + (1 - b) * (-epsilon))
   
   f_PL1 <- p * a
@@ -32,15 +34,36 @@ objective <- function(params, p, gamma, sigma_pl, lambda, epsilon) {
   f_y0 <- f_PL0 + f_CZ0
   
   I <- 0
-  if (f_PL1 > 0) I <- I + f_PL1 * log(f_PL1 / (p * f_y1))
-  if (f_PL0 > 0) I <- I + f_PL0 * log(f_PL0 / (p * f_y0))
-  if (f_CZ1 > 0) I <- I + f_CZ1 * log(f_CZ1 / ((1 - p) * f_y1))
-  if (f_CZ0 > 0) I <- I + f_CZ0 * log(f_CZ0 / ((1 - p) * f_y0))
+  if (f_PL1 > 0) I <- I + f_PL1 * safe_log(f_PL1 / (p * f_y1))
+  if (f_PL0 > 0) I <- I + f_PL0 * safe_log(f_PL0 / (p * f_y0))
+  if (f_CZ1 > 0) I <- I + f_CZ1 * safe_log(f_CZ1 / ((1 - p) * f_y1))
+  if (f_CZ0 > 0) I <- I + f_CZ0 * safe_log(f_CZ0 / ((1 - p) * f_y0))
   
   return(-EU + lambda * I)
 }
-
 solve_ab <- function(p, gamma, sigma_pl, lambda, epsilon) {
+  E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
+  E_CZ <- -exp(gamma^2 / 2)
+  
+  # If p ≈ 0: buyer expects CZ; what if a rare PL shows up?
+  if (p < 1e-3) {
+    a_star <- as.numeric(E_PL > -epsilon)  # Will you buy from a rare PL?
+    b_star <- as.numeric(E_CZ > -epsilon)  # Will you buy from a likely CZ? Should be 1
+    EU <- p * (a_star * E_PL + (1 - a_star) * (-epsilon)) +
+      (1 - p) * (b_star * E_CZ + (1 - b_star) * (-epsilon))
+    return(list(value = -EU, par = c(a_star, b_star)))
+  }
+  
+  # If p ≈ 1: buyer expects PL; what if a rare CZ shows up?
+  if (p > 1 - 1e-3) {
+    a_star <- as.numeric(E_PL > -epsilon)  # Will you buy from a likely PL?
+    b_star <- as.numeric(E_CZ > -epsilon)  # Will you buy from a rare CZ?
+    EU <- p * (a_star * E_PL + (1 - a_star) * (-epsilon)) +
+      (1 - p) * (b_star * E_CZ + (1 - b_star) * (-epsilon))
+    return(list(value = -EU, par = c(a_star, b_star)))
+  }
+  
+  # Else: use optimization
   res <- optim(
     par = c(0.5, 0.5),
     fn = objective,
@@ -53,32 +76,29 @@ solve_ab <- function(p, gamma, sigma_pl, lambda, epsilon) {
     lower = c(0, 0),
     upper = c(1, 1)
   )
+  
   return(res)
 }
+
+
 
 compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 1000) {
   E_PL <- -exp(gamma^2 * sigma_pl^2 / 2)
   E_CZ <- -exp(gamma^2 / 2)
   p_grid <- seq(0.001, 0.999, length.out = n_grid)
-
   
+  # Precompute simple structures
   V_no_info <- expected_util(p_grid, gamma = gamma, sigma_pl = sigma_pl, epsilon = epsilon)
   V_full_info <- -p_grid * epsilon + (1 - p_grid) * E_CZ
   V_perfect <- pmax(-lambda * H(p_grid) + V_full_info, V_no_info)
   
-  V_RI <- mapply(
-    function(p) {-(solve_ab(p, gamma, sigma_pl, lambda, epsilon)$value)},
-    p_grid
-  )
+  # Solve only once per p
+  solve_res <- lapply(p_grid, function(p) solve_ab(p, gamma, sigma_pl, lambda, epsilon))
+  V_RI <- sapply(solve_res, function(res) -res$value)
+  a_star_RI <- sapply(solve_res, function(res) res$par[1])
+  b_star_RI <- sapply(solve_res, function(res) res$par[2])
   
-  a_star_RI <- vapply(
-    p_grid, function(p) solve_ab(p, gamma, sigma_pl, lambda, epsilon)$par[1], numeric(1)
-  )
-  
-  b_star_RI <- vapply(
-    p_grid, function(p) solve_ab(p, gamma, sigma_pl, lambda, epsilon)$par[2], numeric(1)
-  )
-  
+  # Compute buying decisions
   buy_RI <- p_grid * a_star_RI + (1 - p_grid) * b_star_RI
   buy_no_info <- (p_grid * E_PL + (1 - p_grid) * E_CZ > -epsilon)
   buy_full_info <- 1 - p_grid
@@ -90,6 +110,7 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 1000) {
     p_grid, V_no_info
   )
   
+  # Compute mutual information under RI
   info_RI <- mapply(
     function(p, a, b) {
       f_PL1 <- p * a
@@ -99,17 +120,18 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 1000) {
       f_y1 <- f_PL1 + f_CZ1
       f_y0 <- f_PL0 + f_CZ0
       I <- 0
-      if (f_PL1 > 0) I <- I + f_PL1 * log(f_PL1 / (p * f_y1))
-      if (f_PL0 > 0) I <- I + f_PL0 * log(f_PL0 / (p * f_y0))
-      if (f_CZ1 > 0) I <- I + f_CZ1 * log(f_CZ1 / ((1 - p) * f_y1))
-      if (f_CZ0 > 0) I <- I + f_CZ0 * log(f_CZ0 / ((1 - p) * f_y0))
+      if (f_PL1 > 0) I <- I + f_PL1 * safe_log(f_PL1 / (p * f_y1))
+      if (f_PL0 > 0) I <- I + f_PL0 * safe_log(f_PL0 / (p * f_y0))
+      if (f_CZ1 > 0) I <- I + f_CZ1 * safe_log(f_CZ1 / ((1 - p) * f_y1))
+      if (f_CZ0 > 0) I <- I + f_CZ0 * safe_log(f_CZ0 / ((1 - p) * f_y0))
       return(I)
     },
     p_grid, a_star_RI, b_star_RI
   )
   
+  # Other information structures
   info_full_info <- H(p_grid)
-  info_no_info <- rep(0, length(p_grid))
+  info_no_info <- rep(0, n_grid)
   info_perfect <- mapply(
     function(p, v_no) {
       signal_aq <- as.numeric(-lambda * H(p) + (-p * epsilon + (1 - p) * E_CZ) >= v_no)
@@ -118,9 +140,10 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 1000) {
     p_grid, V_no_info
   )
   
+  # Behavioral discrimination
   behavioral_discrimination_RI <- b_star_RI - a_star_RI
-  behavioral_discrimination_full_info <- rep(1, length(p_grid))
-  behavioral_discrimination_no_info <- rep(0, length(p_grid))
+  behavioral_discrimination_full_info <- rep(1, n_grid)
+  behavioral_discrimination_no_info <- rep(0, n_grid)
   behavioral_discrimination_perfect <- mapply(
     function(p, v_no) {
       signal_aq <- as.numeric(-lambda * H(p) + (-p * epsilon + (1 - p) * E_CZ) >= v_no)
@@ -129,6 +152,7 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 1000) {
     p_grid, V_no_info
   )
   
+  # Output
   list(
     df = data.frame(
       p = rep(p_grid, 4),
@@ -146,6 +170,7 @@ compute_curves <- function(sigma_pl, gamma, lambda, epsilon, n_grid = 1000) {
     star = data.frame(p = p_grid, a = a_star_RI, b = b_star_RI)
   )
 }
+
 
 # ---------- UI --------------------------------------------------------------
 ui <- fluidPage(
