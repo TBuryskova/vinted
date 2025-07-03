@@ -57,7 +57,7 @@ compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 1000) {
   
   V_no_info <- (eps_grid<p*E_PL+(1-p)*E_CZ)*(p*E_PL+(1-p)*E_CZ)+(eps_grid>p*E_PL+(1-p)*E_CZ)*eps_grid
   V_full_info <-  (eps_grid<E_PL)*(p*E_PL+(1-p)*E_CZ)+(eps_grid<E_CZ &eps_grid>E_PL)*(p*eps_grid+(1-p)*E_CZ)+(eps_grid>E_CZ)*eps_grid
-  V_perfect <- pmax(-lambda * H(p) + V_full_info, V_no_info)
+  V_perfect <- pmax(-lambda * rep(H(p), n_grid) + V_full_info, V_no_info)
   
   solve_res <- lapply(eps_grid, function(eps) solve_ab(p, E_PL, E_CZ, lambda, eps))
   V_RI <- sapply(solve_res, function(res) -res$value)
@@ -67,10 +67,7 @@ compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 1000) {
   buy_RI <- p * a_star_RI + (1 - p) * b_star_RI
   buy_no_info <- 1*(eps_grid<p*E_PL+(1-p)*E_CZ)+0     
   buy_full_info <- (eps_grid<E_PL)*1+(eps_grid<E_CZ &eps_grid>E_PL)*( (1-p))
-  buy_perfect <- as.numeric(-lambda * H(p) + (p * eps_grid + (1 - p) * E_CZ) >= 
-                              p * E_PL + (1 - p) * E_CZ) * (1 - p) +
-    as.numeric(-lambda * H(p) + (p * eps_grid + (1 - p) * E_CZ) < 
-                 p * E_PL + (1 - p) * E_CZ) * (p * E_PL + (1 - p) * E_CZ > eps_grid)
+  buy_perfect <- (V_full_info-lambda*rep(H(p), n_grid)>V_no_info)*buy_full_info+(V_full_info-lambda*rep(H(p), n_grid)<V_no_info)*buy_no_info
   
   info_RI <- mapply(
     function(a, b, eps) {
@@ -88,10 +85,13 @@ compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 1000) {
       return(I)
     }, a_star_RI, b_star_RI, eps_grid
   )
-  info_full  <- H(p)*(eps_grid<E_CZ &eps_grid>E_PL)
-  info_perfect <- as.numeric(-lambda * H(p) + V_full_info >= V_no_info) * H(p)
+  info_full  <- rep(H(p),n_grid)
+  info_perfect <- (V_full_info-lambda*rep(H(p),n_grid)>V_no_info)*rep(H(p),n_grid)+(V_full_info-lambda*rep(H(p),n_grid)<V_no_info)*0
+  
+  
   behavioral_discrimination_RI <- b_star_RI - a_star_RI
-  behavioral_discrimination_perfect <- as.numeric(-lambda * H(p) + V_full_info >= V_no_info)
+  behavioral_discrimination_perfect <- (V_full_info-lambda*rep(H(p),n_grid)>V_no_info)*1+(V_full_info-lambda*rep(H(p),n_grid)<V_no_info)*0
+  
   
   list(
     df = data.frame(
@@ -106,12 +106,16 @@ compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 1000) {
   )
 }
 
+area_under_curve <- function(x, y) {
+  ord <- order(x)
+ sum(diff(x[ord]) * (head(y[ord], -1) + tail(y[ord], -1)) / 2)
+}
 # ---------- UI --------------------------------------------------------------
 ui <- fluidPage(
   titlePanel("Outcomes vs Epsilon under Different Info Structures"),
   sidebarLayout(
     sidebarPanel(
-      sliderInput("lambda", "λ", min = 0, max = 5, value = 1, step = 0.1),
+      sliderInput("lambda", "λ", min = 0, max = 1, value = 0.2, step = 0.05),
       sliderInput("E_CZ", "E_CZ", min = 0, max = 1, value = 0.6, step = 0.01),
       sliderInput("E_PL", "E_PL", min = 0, max = 1, value = 0.3, step = 0.01),
       sliderInput("p", "p", min = 0, max = 1, value = 0.2, step = 0.01)
@@ -135,40 +139,104 @@ ui <- fluidPage(
 
 # ---------- Server ----------------------------------------------------------
 server <- function(input, output, session) {
+  areas_buy <- reactive({
+    df <- curves()$df
+    df %>%
+      group_by(type) %>%
+      summarize(area = area_under_curve(epsilon, buy), .groups = "drop")
+  })
+  
+  areas_discrim <- reactive({
+    df <- curves()$df
+    df %>%
+      group_by(type) %>%
+      summarize(area = area_under_curve(epsilon, behavioral_discrimination), .groups = "drop")
+  })
+  
+  areas_util <- reactive({
+    df <- curves()$df
+    df %>%
+      group_by(type) %>%
+      summarize(area = area_under_curve(epsilon, value), .groups = "drop")
+  })
+  
+  areas_info <- reactive({
+    df <- curves()$df
+    df %>%
+      group_by(type) %>%
+      summarize(area = area_under_curve(epsilon, info), .groups = "drop")
+  })
+  
   curves <- reactive({
     compute_curves(E_PL = input$E_PL, E_CZ = input$E_CZ, lambda = input$lambda, p = input$p)
   })
   
   output$curvePlot <- renderPlot({
+    df <- curves()$df
+    areas <- areas_util()
     ggplot(curves()$df, aes(x = epsilon, y = value, colour = type)) +
       geom_line(linewidth = 1) +
+      geom_text(
+        data = areas,
+        aes(x = 0.1, y = 0.95 - 0.04 * as.numeric(factor(type)), 
+            label = paste0("∫ = ", round(area,4)), colour = type),
+       show.legend = FALSE
+      ) +
       labs(x = expression(epsilon), y = "Value", title = "Expected payoff") +
       theme_minimal() +
       theme(legend.position = "bottom")
   })
   
   output$buyPlot <- renderPlot({
-    ggplot(curves()$df, aes(x = epsilon, y = buy, colour = type)) +
+    df <- curves()$df
+    areas <- areas_buy()
+    
+    ggplot(df, aes(x = epsilon, y = buy, colour = type)) +
       geom_line(linewidth = 1) +
       labs(x = expression(epsilon), y = "Probability of Buying", title = "Probability of buying") +
+      geom_text(
+        data = areas,
+        aes(x = 0.05, y = 0.55 - 0.05 * as.numeric(factor(type)), 
+            label = paste0("∫ = ", round(area, 4)), colour = type),
+        hjust = 0, show.legend = FALSE
+      ) +
       theme_minimal() +
       theme(legend.position = "bottom")
   })
   
   output$discrimPlot <- renderPlot({
-    ggplot(curves()$df, aes(x = epsilon, y = behavioral_discrimination, colour = type)) +
+    df <- curves()$df
+    areas <- areas_discrim()
+    
+    ggplot(df, aes(x = epsilon, y = behavioral_discrimination, colour = type)) +
       geom_line(linewidth = 1) +
       labs(x = expression(epsilon), y = "Discrimination", title = "Behavioral Discrimination") +
+      geom_text(
+        data = areas,
+        aes(x = 0.95, y = 0.95 - 0.07 * as.numeric(factor(type)), 
+            label = paste0("∫ = ", round(area, 4)), colour = type),
+        hjust = 1, show.legend = FALSE
+      ) +
       theme_minimal() +
       theme(legend.position = "bottom")
   })
   
+  
   output$info_acquired <- renderPlot({
+    df <- curves()$df
+    areas <- areas_info()
+    
     ggplot(curves()$df, aes(x = epsilon, y = info, colour = type)) +
       geom_line(linewidth = 1) +
       labs(x = expression(epsilon), y = "Mutual Information", title = "Information Acquired") +
       theme_minimal() +
-      theme(legend.position = "bottom")
+      theme(legend.position = "bottom") +
+      geom_text(
+        data = areas,
+        aes(x = 0.4, y = 0.3- 0.04 * as.numeric(factor(type)), 
+            label = paste0("∫ = ", round(area, 4)), colour = type),
+        hjust = 1, show.legend = FALSE
+      ) 
   })
   
   output$astarplot <- renderPlot({
