@@ -292,7 +292,7 @@ server <- function(input, output, session) {
       theme_minimal()
   })
   lambda_sweep_data <- reactive({
-    lambda_grid <- seq(0.01, 0.99, length.out = 40)
+    lambda_grid <- seq(0.01, 0.99, length.out = 20)
     
     all_data <- lapply(lambda_grid, function(lam) {
       res <- compute_curves(
