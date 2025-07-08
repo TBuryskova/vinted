@@ -11,6 +11,7 @@ safe_log <- function(x) log(pmax(x, 1e-10))
 expected_util <- function(r, E_PL, E_CZ, epsilon) {
   pmax((1 - r) * E_CZ + r * E_PL, epsilon)
 }
+mu <- 0.05
 
 objective <- function(params, p, E_PL, E_CZ, lambda, epsilon) {
   a <- params[1]
@@ -55,6 +56,8 @@ solve_ab <- function(p, E_PL, E_CZ, lambda, epsilon) {
 compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 1000) {
   eps_grid <- seq(0.001, 0.999, length.out = n_grid)
   
+  
+  
   V_no_info <- (eps_grid<p*E_PL+(1-p)*E_CZ)*(p*E_PL+(1-p)*E_CZ)+(eps_grid>p*E_PL+(1-p)*E_CZ)*eps_grid
   V_full_info <-  (eps_grid<E_PL)*(p*E_PL+(1-p)*E_CZ)+(eps_grid<E_CZ &eps_grid>E_PL)*(p*eps_grid+(1-p)*E_CZ)+(eps_grid>E_CZ)*eps_grid
   V_perfect <- pmax(-lambda * rep(H(p), n_grid) + V_full_info, V_no_info)
@@ -65,9 +68,24 @@ compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 1000) {
   b_star_RI <- sapply(solve_res, function(res) res$par[2])
   
   buy_RI <- p * a_star_RI + (1 - p) * b_star_RI
-  buy_no_info <- 1*(eps_grid<p*E_PL+(1-p)*E_CZ)+0     
+  buy_no_info <- 1*(eps_grid<p*E_PL+(1-p)*E_CZ)+0
   buy_full_info <- (eps_grid<E_PL)*1+(eps_grid<E_CZ &eps_grid>E_PL)*( (1-p))
   buy_perfect <- (V_full_info-lambda*rep(H(p), n_grid)>V_no_info)*buy_full_info+(V_full_info-lambda*rep(H(p), n_grid)<V_no_info)*buy_no_info
+
+  # mu <- 0.1
+  # U_no_info <- p * E_PL + (1 - p) * E_CZ
+  # buy_no_info <- 1 / (1 + exp((eps_grid - U_no_info) / mu))
+  # 
+  # U_full_info <- ifelse(
+  #   eps_grid < E_PL, E_PL,
+  #   ifelse(eps_grid < E_CZ, (1 - p) * E_CZ + p * eps_grid, eps_grid)
+  # )
+  # buy_full_info <- 1 / (1 + exp((eps_grid - U_full_info) / mu))
+  # V_eff_perfect <- pmax(V_full_info - lambda * H(p), V_no_info)
+  # buy_perfect <- 1 / (1 + exp((eps_grid - V_eff_perfect) / mu))
+  # 
+  # U_RI <- p * a_star_RI + (1 - p) * b_star_RI
+  # buy_RI <- 1 / (1 + exp((eps_grid - U_RI) / mu))
   
   info_RI <- mapply(
     function(a, b, eps) {
@@ -86,12 +104,12 @@ compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 1000) {
     }, a_star_RI, b_star_RI, eps_grid
   )
   info_full  <- rep(H(p),n_grid)
-  info_perfect <- (V_full_info-lambda*rep(H(p),n_grid)>V_no_info)*rep(H(p),n_grid)+(V_full_info-lambda*rep(H(p),n_grid)<V_no_info)*0
+  info_perfect <- ((V_full_info-lambda*rep(H(p),n_grid)>V_no_info)*rep(H(p),n_grid)+(V_full_info-lambda*rep(H(p),n_grid)<V_no_info)*0)
   
   
   behavioral_discrimination_RI <- b_star_RI - a_star_RI
   behavioral_discrimination_perfect <- (V_full_info-lambda*rep(H(p),n_grid)>V_no_info)*1+(V_full_info-lambda*rep(H(p),n_grid)<V_no_info)*0
-  
+  l<-1
   
   list(
     df = data.frame(
@@ -99,9 +117,9 @@ compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 1000) {
       value = c(V_no_info, V_full_info, V_perfect, V_RI),
       type = rep(c("No info", "Full info", "Perfect signal", "RI optimal"), each = n_grid),
       behavioral_discrimination = c(rep(0, n_grid), rep(1, n_grid), behavioral_discrimination_perfect, behavioral_discrimination_RI),
-      info = c(rep(0, n_grid), info_full, info_perfect, info_RI),
+      info = c(rep(0, n_grid), rep(0, n_grid), info_perfect, info_RI),
       buy = c(buy_no_info, buy_full_info, buy_perfect, buy_RI)
-    ),
+    ) %>% mutate(profit=epsilon*buy+info*l),
     star = data.frame(epsilon = eps_grid, a = a_star_RI, b = b_star_RI)
   )
 }
@@ -116,22 +134,23 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       sliderInput("lambda", "λ", min = 0, max = 1, value = 0.2, step = 0.05),
-      sliderInput("E_CZ", "E_CZ", min = 0, max = 1, value = 0.6, step = 0.01),
-      sliderInput("E_PL", "E_PL", min = 0, max = 1, value = 0.3, step = 0.01),
+      sliderInput("E_CZ", "E_CZ", min = 0, max = 1, value = 0.9, step = 0.01),
+      sliderInput("E_PL", "E_PL", min = 0, max = 1, value = 0.1, step = 0.01),
       sliderInput("p", "p", min = 0, max = 1, value = 0.2, step = 0.01)
     ),
     mainPanel(
       fluidRow(
         column(6, plotOutput("curvePlot")),
-        column(6, plotOutput("buyPlot"))
+        column(6, plotOutput("profitPlot"))
       ),
       fluidRow(
-        column(6, plotOutput("discrimPlot")),
+        column(6, plotOutput("buyPlot")),
         column(6, plotOutput("info_acquired"))
       ),
       fluidRow(
-        column(6, plotOutput("astarplot")),
-        column(6, plotOutput("bstarplot"))
+        column(4, plotOutput("discrimPlot")),
+        column(4, plotOutput("astarplot")),
+        column(4, plotOutput("bstarplot"))
       )
     )
   )
@@ -167,6 +186,13 @@ server <- function(input, output, session) {
       summarize(area = area_under_curve(epsilon, info), .groups = "drop")
   })
   
+  areas_profit <- reactive({
+    df <- curves()$df
+    df %>%
+      group_by(type) %>%
+      summarize(area = area_under_curve(epsilon, profit), .groups = "drop")
+  })
+  
   curves <- reactive({
     compute_curves(E_PL = input$E_PL, E_CZ = input$E_CZ, lambda = input$lambda, p = input$p)
   })
@@ -194,6 +220,23 @@ server <- function(input, output, session) {
     ggplot(df, aes(x = epsilon, y = buy, colour = type)) +
       geom_line(linewidth = 1) +
       labs(x = expression(epsilon), y = "Probability of Buying", title = "Probability of buying") +
+      geom_text(
+        data = areas,
+        aes(x = 0.05, y = 0.55 - 0.05 * as.numeric(factor(type)), 
+            label = paste0("∫ = ", round(area, 4)), colour = type),
+        hjust = 0, show.legend = FALSE
+      ) +
+      theme_minimal() +
+      theme(legend.position = "bottom")
+  })
+  
+  output$profitPlot <- renderPlot({
+    df <- curves()$df
+    areas <- areas_profit()
+    
+    ggplot(df, aes(x = epsilon, y = profit, colour = type)) +
+      geom_line(linewidth = 1) +
+      labs(x = expression(epsilon), y = "Profit of the platform", title = "Profit of the platform") +
       geom_text(
         data = areas,
         aes(x = 0.05, y = 0.55 - 0.05 * as.numeric(factor(type)), 
