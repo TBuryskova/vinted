@@ -1,7 +1,6 @@
 library(shiny)
 library(tidyverse)
 library(ggplot2)
-library(shinyjs)  
 
 # ---------- Helper functions ------------------------------------------------
 H <- function(x) {
@@ -114,7 +113,6 @@ area_under_curve <- function(x, y) {
 # ---------- UI --------------------------------------------------------------
 ui <- fluidPage(
   titlePanel("Outcomes vs Epsilon under Different Info Structures"),
-  useShinyjs(),
   sidebarLayout(
     sidebarPanel(
       sliderInput("lambda", "λ", min = 0, max = 1, value = 0.2, step = 0.05),
@@ -294,7 +292,7 @@ server <- function(input, output, session) {
       theme_minimal()
   })
   lambda_sweep_data <- reactive({
-    lambda_grid <- seq(0.01, 0.99, length.out = 500)
+    lambda_grid <- seq(0.01, 0.99, length.out = 40)
     
     all_data <- lapply(lambda_grid, function(lam) {
       res <- compute_curves(
