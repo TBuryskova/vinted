@@ -11,7 +11,6 @@ safe_log <- function(x) log(pmax(x, 1e-10))
 expected_util <- function(r, E_PL, E_CZ, epsilon) {
   pmax((1 - r) * E_CZ + r * E_PL, epsilon)
 }
-mu <- 0.05
 
 objective <- function(params, p, E_PL, E_CZ, lambda, epsilon) {
   a <- params[1]
@@ -54,7 +53,7 @@ solve_ab <- function(p, E_PL, E_CZ, lambda, epsilon) {
 }
 
 compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 100) {
-  eps_grid <- seq(0.01, 0.99, length.out = n_grid)
+  eps_grid <- seq(0.0, 1, length.out = n_grid)
   
   V_no_info <- (eps_grid<p*E_PL+(1-p)*E_CZ)*(p*E_PL+(1-p)*E_CZ)+(eps_grid>p*E_PL+(1-p)*E_CZ)*eps_grid
   V_full_info <-  (eps_grid<E_PL)*(p*E_PL+(1-p)*E_CZ)+(eps_grid<E_CZ &eps_grid>E_PL)*(p*eps_grid+(1-p)*E_CZ)+(eps_grid>E_CZ)*eps_grid
@@ -106,9 +105,31 @@ compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 100) {
 }
 
 area_under_curve <- function(x, y) {
-  ord <- order(x)
-  sum(diff(x[ord]) * (head(y[ord], -1) + tail(y[ord], -1)) / 2)
+  f <- approxfun(x, y)  # create interpolation function
+  integrate(f, min(x), max(x))$value
 }
+
+area_V_no_info_analytic <- function(p, E_PL, E_CZ) {
+  bar_E <- p * E_PL + (1 - p) * E_CZ
+  (1 + bar_E^2) / 2}
+
+area_V_full_info_analytic <- function(p, E_PL, E_CZ) {
+  bar_E <- p * E_PL + (1 - p) * E_CZ
+  int1 <- bar_E * E_PL
+  int2 <- (p / 2) * (E_CZ^2 - E_PL^2) + (1 - p) * E_CZ * (E_CZ - E_PL)
+  int3 <- (1 - E_CZ^2) / 2
+  int1 + int2 + int3  
+}
+
+area_profit_no_info_analytic <- function(p, E_PL, E_CZ) {
+   0.5 * (p * E_PL + (1 - p) * E_CZ)^2
+}
+
+area_profit_full_info_analytic <- function(p, E_PL, E_CZ) {
+  0.5 * (p * E_PL^2 + (1 - p) * E_CZ^2)
+}
+
+
 
 # ---------- UI --------------------------------------------------------------
 ui <- fluidPage(
@@ -172,8 +193,13 @@ server <- function(input, output, session) {
     df <- curves()$df
     df %>%
       group_by(type) %>%
-      summarize(area = area_under_curve(epsilon, value), .groups = "drop")
+      reframe(area = dplyr::case_when(
+        type == "No info" ~ area_V_no_info_analytic(input$p, input$E_PL, input$E_CZ),
+        type == "Full info" ~ area_V_full_info_analytic(input$p, input$E_PL, input$E_CZ),
+        TRUE ~ area_under_curve(epsilon, value)
+      ), .groups = "drop")
   })
+  
   
   areas_info <- reactive({
     df <- curves()$df
@@ -186,8 +212,13 @@ server <- function(input, output, session) {
     df <- curves()$df
     df %>%
       group_by(type) %>%
-      summarize(area = area_under_curve(epsilon, profit), .groups = "drop")
+      reframe(area = dplyr::case_when(
+        type == "No info" ~ area_profit_no_info_analytic(input$p, input$E_PL, input$E_CZ),
+        type == "Full info" ~ area_profit_full_info_analytic(input$p, input$E_PL, input$E_CZ),
+        TRUE ~ area_under_curve(epsilon, profit)
+      ), .groups = "drop")
   })
+  
   
   curves <- reactive({
     compute_curves(E_PL = input$E_PL, E_CZ = input$E_CZ, lambda = input$lambda, p = input$p)
@@ -292,17 +323,19 @@ server <- function(input, output, session) {
       theme_minimal()
   })
   lambda_sweep_data <- reactive({
-    lambda_grid <- seq(0.01, 0.99, length.out = 20)
+    lambda_grid <- seq(0.01, 0.99, length.out = 100)
     
     all_data <- lapply(lambda_grid, function(lam) {
-      res <- compute_curves(
-        E_PL = input$E_PL,
-        E_CZ = input$E_CZ,
-        lambda = lam,
-        p = input$p
-      )$df
+      E_PL <- input$E_PL
+      E_CZ <- input$E_CZ
+      p <- input$p
       
-      profit_area <- res %>%
+      # Compute full data
+      df <- compute_curves(E_PL = E_PL, E_CZ = E_CZ, lambda = lam, p = p)$df
+      
+      # Separate types
+      numeric_df <- df %>%
+        filter(!type %in% c("No info", "Full info")) %>%
         group_by(type) %>%
         summarize(
           platform_profit = area_under_curve(epsilon, profit),
@@ -311,12 +344,25 @@ server <- function(input, output, session) {
         ) %>%
         mutate(lambda = lam)
       
-      return(profit_area)
+      analytic_df <- tibble(
+        type = c("No info", "Full info"),
+        platform_profit = c(
+          area_profit_no_info_analytic(p, E_PL, E_CZ),
+          area_profit_full_info_analytic(p, E_PL, E_CZ)
+        ),
+        user_utility = c(
+          area_V_no_info_analytic(p, E_PL, E_CZ),
+          area_V_full_info_analytic(p, E_PL, E_CZ)
+        ),
+        lambda = lam
+      )
+      
+      bind_rows(numeric_df, analytic_df)
     })
     
     bind_rows(all_data)
   })
-
+  
   
   output$lambdaUserPlot <- renderPlot({
     df <- lambda_sweep_data()
