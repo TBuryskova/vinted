@@ -11,7 +11,6 @@ safe_log <- function(x) log(pmax(x, 1e-10))
 expected_util <- function(r, E_PL, E_CZ, epsilon) {
   pmax((1 - r) * E_CZ + r * E_PL, epsilon)
 }
-mu <- 0.05
 
 objective <- function(params, p, E_PL, E_CZ, lambda, epsilon) {
   a <- params[1]
@@ -54,7 +53,7 @@ solve_ab <- function(p, E_PL, E_CZ, lambda, epsilon) {
 }
 
 compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 100) {
-  eps_grid <- seq(0.01, 0.99, length.out = n_grid)
+  eps_grid <- seq(0.0, 1, length.out = n_grid)
   
   V_no_info <- (eps_grid<p*E_PL+(1-p)*E_CZ)*(p*E_PL+(1-p)*E_CZ)+(eps_grid>p*E_PL+(1-p)*E_CZ)*eps_grid
   V_full_info <-  (eps_grid<E_PL)*(p*E_PL+(1-p)*E_CZ)+(eps_grid<E_CZ &eps_grid>E_PL)*(p*eps_grid+(1-p)*E_CZ)+(eps_grid>E_CZ)*eps_grid
@@ -106,9 +105,108 @@ compute_curves <- function(E_PL, E_CZ, lambda, p, n_grid = 100) {
 }
 
 area_under_curve <- function(x, y) {
-  ord <- order(x)
-  sum(diff(x[ord]) * (head(y[ord], -1) + tail(y[ord], -1)) / 2)
+  f <- approxfun(x, y)  # create interpolation function
+  integrate(f, min(x), max(x))$value
 }
+
+area_V_no_info_analytic <- function(p, E_PL, E_CZ) {
+  bar_E <- p * E_PL + (1 - p) * E_CZ
+  (1 + bar_E^2) / 2}
+
+area_V_full_info_analytic <- function(p, E_PL, E_CZ) {
+  bar_E <- p * E_PL + (1 - p) * E_CZ
+  int1 <- bar_E * E_PL
+  int2 <- (p / 2) * (E_CZ^2 - E_PL^2) + (1 - p) * E_CZ * (E_CZ - E_PL)
+  int3 <- (1 - E_CZ^2) / 2
+  int1 + int2 + int3  
+}
+
+area_profit_no_info_analytic <- function(p, E_PL, E_CZ) {
+   0.5 * (p * E_PL + (1 - p) * E_CZ)^2
+}
+
+area_profit_full_info_analytic <- function(p, E_PL, E_CZ) {
+  0.5 * (p * E_PL^2 + (1 - p) * E_CZ^2)
+}
+
+area_V_perfect_analytic <- function(p, E_PL, E_CZ, lambda) {
+  H_p <- H(p)
+  bar_E <- p * E_PL + (1 - p) * E_CZ
+  
+  # Vektorová verze
+  V_full <- function(eps) {
+    ifelse(eps < E_PL, 
+           p * E_PL + (1 - p) * E_CZ,
+           ifelse(eps < E_CZ,
+                  p * eps + (1 - p) * E_CZ,
+                  eps))
+  }
+  
+  V_no <- function(eps) {
+    ifelse(eps < bar_E, bar_E, eps)
+  }
+  
+  diff_fun <- function(eps) {
+    V_full(eps) - lambda * H_p - V_no(eps)
+  }
+  
+  eps_star <- tryCatch({
+    uniroot(diff_fun, interval = c(0.001, 0.999))$root
+  }, error = function(e) {
+    if (diff_fun(0.001) > 0) return(0)
+    if (diff_fun(0.999) < 0) return(1)
+    return(NA)
+  })
+  
+  part1 <- integrate(Vectorize(V_no), 0, eps_star)$value
+  part2 <- integrate(function(eps) V_full(eps) - lambda * H_p, eps_star, 1)$value
+  
+  part1 + part2
+}
+area_profit_perfect_analytic <- function(p, E_PL, E_CZ, lambda) {
+  H_p <- H(p)
+  bar_E <- p * E_PL + (1 - p) * E_CZ
+  
+  V_full <- function(eps) {
+    ifelse(eps < E_PL, 
+           p * E_PL + (1 - p) * E_CZ,
+           ifelse(eps < E_CZ,
+                  p * eps + (1 - p) * E_CZ,
+                  eps))
+  }
+  
+  V_no <- function(eps) {
+    ifelse(eps < bar_E, bar_E, eps)
+  }
+  
+  buy_full <- function(eps) {
+    ifelse(eps < E_PL, 1,
+           ifelse(eps < E_CZ, 1 - p, 0))
+  }
+  
+  buy_no <- function(eps) {
+    ifelse(eps < bar_E, 1, 0)
+  }
+  
+  diff_fun <- function(eps) V_full(eps) - lambda * H_p - V_no(eps)
+  
+  eps_star <- tryCatch({
+    uniroot(diff_fun, interval = c(0.001, 0.999))$root
+  }, error = function(e) {
+    if (diff_fun(0.001) > 0) return(0)
+    if (diff_fun(0.999) < 0) return(1)
+    return(NA)
+  })
+  
+  profit_no <- function(eps) eps * buy_no(eps)
+  profit_full <- function(eps) eps * buy_full(eps) + lambda * H_p
+  
+  part1 <- integrate(Vectorize(profit_no), 0, eps_star)$value
+  part2 <- integrate(Vectorize(profit_full), eps_star, 1)$value
+  
+  part1 + part2
+}
+
 
 # ---------- UI --------------------------------------------------------------
 ui <- fluidPage(
@@ -172,8 +270,14 @@ server <- function(input, output, session) {
     df <- curves()$df
     df %>%
       group_by(type) %>%
-      summarize(area = area_under_curve(epsilon, value), .groups = "drop")
+      reframe(area = dplyr::case_when(
+        type == "No info" ~ area_V_no_info_analytic(input$p, input$E_PL, input$E_CZ),
+        type == "Full info" ~ area_V_full_info_analytic(input$p, input$E_PL, input$E_CZ),
+        type == "Perfect signal" ~ area_V_perfect_analytic(input$p, input$E_PL, input$E_CZ, input$lambda),
+        TRUE ~ area_under_curve(epsilon, value)
+      ), .groups = "drop")
   })
+  
   
   areas_info <- reactive({
     df <- curves()$df
@@ -186,8 +290,14 @@ server <- function(input, output, session) {
     df <- curves()$df
     df %>%
       group_by(type) %>%
-      summarize(area = area_under_curve(epsilon, profit), .groups = "drop")
+      reframe(area = dplyr::case_when(
+        type == "No info" ~ area_profit_no_info_analytic(input$p, input$E_PL, input$E_CZ),
+        type == "Full info" ~ area_profit_full_info_analytic(input$p, input$E_PL, input$E_CZ),
+        type == "Perfect signal" ~ area_V_perfect_analytic(input$p, input$E_PL, input$E_CZ, input$lambda),
+        TRUE ~ area_under_curve(epsilon, profit)
+      ), .groups = "drop")
   })
+  
   
   curves <- reactive({
     compute_curves(E_PL = input$E_PL, E_CZ = input$E_CZ, lambda = input$lambda, p = input$p)
@@ -292,17 +402,19 @@ server <- function(input, output, session) {
       theme_minimal()
   })
   lambda_sweep_data <- reactive({
-    lambda_grid <- seq(0.01, 0.99, length.out = 20)
+    lambda_grid <- seq(0, 1, length.out = 50)
     
     all_data <- lapply(lambda_grid, function(lam) {
-      res <- compute_curves(
-        E_PL = input$E_PL,
-        E_CZ = input$E_CZ,
-        lambda = lam,
-        p = input$p
-      )$df
+      E_PL <- input$E_PL
+      E_CZ <- input$E_CZ
+      p <- input$p
       
-      profit_area <- res %>%
+      # Compute full data
+      df <- compute_curves(E_PL = E_PL, E_CZ = E_CZ, lambda = lam, p = p)$df
+      
+      # Separate types
+      numeric_df <- df %>%
+        filter(!type %in% c("No info", "Full info", "Perfect signal")) %>%
         group_by(type) %>%
         summarize(
           platform_profit = area_under_curve(epsilon, profit),
@@ -311,18 +423,33 @@ server <- function(input, output, session) {
         ) %>%
         mutate(lambda = lam)
       
-      return(profit_area)
+      analytic_df <- tibble(
+        type = c("No info", "Full info", "Perfect signal"),
+        platform_profit = c(
+          area_profit_no_info_analytic(p, E_PL, E_CZ),
+          area_profit_full_info_analytic(p, E_PL, E_CZ),
+          area_profit_perfect_analytic(p,E_PL,E_CZ,lam)
+        ),
+        user_utility = c(
+          area_V_no_info_analytic(p, E_PL, E_CZ),
+          area_V_full_info_analytic(p, E_PL, E_CZ),
+          area_V_perfect_analytic(p,E_PL,E_CZ,lam)
+        ),
+        lambda = lam
+      )
+      
+      bind_rows(numeric_df, analytic_df)
     })
     
     bind_rows(all_data)
   })
-
+  
   
   output$lambdaUserPlot <- renderPlot({
     df <- lambda_sweep_data()
     ggplot(df, aes(x = lambda, y = user_utility, color = type)) +
       geom_line(linewidth = 1) +
-      labs(title = "User Utility vs λ", x = expression(lambda), y = "User Utility") +
+      labs(title = "Overall User Welfare vs λ", x = expression(lambda), y = "User Utility") +
       theme_minimal() +
       theme(legend.position = "bottom")
   })
@@ -330,8 +457,8 @@ server <- function(input, output, session) {
   output$lambdaProfitPlot <- renderPlot({
     df <- lambda_sweep_data()
     ggplot(df, aes(x = lambda, y = platform_profit, color = type)) +
-      geom_line(linewidth = 1) +
-      labs(title = "Platform Profit vs λ", x = expression(lambda), y = "Platform Profit") +
+      geom_smooth(se = FALSE, method = "loess", span = 0.2,linewidth = 1) +
+      labs(title = "Overall Platform Profit vs λ", x = expression(lambda), y = "Platform Profit") +
       theme_minimal() +
       theme(legend.position = "bottom")
   })
