@@ -208,6 +208,7 @@ area_profit_perfect_analytic <- function(p, E_PL, E_CZ, lambda) {
 }
 
 
+
 # ---------- UI --------------------------------------------------------------
 ui <- fluidPage(
   titlePanel("Outcomes vs Epsilon under Different Info Structures"),
@@ -274,6 +275,7 @@ server <- function(input, output, session) {
         type == "No info" ~ area_V_no_info_analytic(input$p, input$E_PL, input$E_CZ),
         type == "Full info" ~ area_V_full_info_analytic(input$p, input$E_PL, input$E_CZ),
         type == "Perfect signal" ~ area_V_perfect_analytic(input$p, input$E_PL, input$E_CZ, input$lambda),
+
         TRUE ~ area_under_curve(epsilon, value)
       ), .groups = "drop")
   })
@@ -294,6 +296,7 @@ server <- function(input, output, session) {
         type == "No info" ~ area_profit_no_info_analytic(input$p, input$E_PL, input$E_CZ),
         type == "Full info" ~ area_profit_full_info_analytic(input$p, input$E_PL, input$E_CZ),
         type == "Perfect signal" ~ area_V_perfect_analytic(input$p, input$E_PL, input$E_CZ, input$lambda),
+
         TRUE ~ area_under_curve(epsilon, profit)
       ), .groups = "drop")
   })
@@ -403,6 +406,7 @@ server <- function(input, output, session) {
   })
   lambda_sweep_data <- reactive({
     lambda_grid <- seq(0, 1, length.out = 50)
+
     
     all_data <- lapply(lambda_grid, function(lam) {
       E_PL <- input$E_PL
@@ -415,6 +419,7 @@ server <- function(input, output, session) {
       # Separate types
       numeric_df <- df %>%
         filter(!type %in% c("No info", "Full info", "Perfect signal")) %>%
+
         group_by(type) %>%
         summarize(
           platform_profit = area_under_curve(epsilon, profit),
@@ -434,6 +439,7 @@ server <- function(input, output, session) {
           area_V_no_info_analytic(p, E_PL, E_CZ),
           area_V_full_info_analytic(p, E_PL, E_CZ),
           area_V_perfect_analytic(p,E_PL,E_CZ,lam)
+
         ),
         lambda = lam
       )
