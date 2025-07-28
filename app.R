@@ -7,21 +7,20 @@ ui <- fluidPage(
   
   sidebarLayout(
     sidebarPanel(
-      numericInput("lambda", "λ (lambda):", value = 0.1, min = 0.01),
-      numericInput("p", "p (probability of L):", value = 0.7, min = 0.01, max = 0.99),
-      numericInput("epsilon", "ε (U0 bar):", value = 1.5),
-      numericInput("U_L", "U_L:", value = 1),
-      numericInput("U_H", "U_H:", value = 2),
-      numericInput("w", "w (info cost):", value = 0),
-      actionButton("compute", "Compute a and b"),
+      sliderInput("p", "p (probability of L):", value = 0.7, min = 0.01, max = 0.99),
+      sliderInput("epsilon", "ε:", value = 1.5, min = 0, max = 5),
+      sliderInput("U_L", "U_L:", value = 1, min = 0, max = 5),
+      sliderInput("U_H", "U_H:", value = 2, min = 0, max = 5),
+      sliderInput("w", "w :", value = 0.2, min = 0.01, max = 0.99),
       actionButton("plot", "Plot All")
     ),
     
     mainPanel(
-      verbatimTextOutput("results"),
       plotOutput("heatmap"),
       plotOutput("utilityPlot"),
-      plotOutput("platformPlot")  # Third plot
+      plotOutput("platformPlot") , # Third plot
+      plotOutput("infoPlot")  # Third plot
+      
     )
   )
 )
@@ -95,33 +94,12 @@ server <- function(input, output) {
     return(mi)
   }
   
-  observeEvent(input$compute, {
-    res <- solve_ab(
-      lambda = input$lambda,
-      p = input$p,
-      epsilon = input$epsilon,
-      U_L = input$U_L,
-      U_H = input$U_H,
-      w = input$w
-    )
-    
-    output$results <- renderPrint({
-      if (res$converged) {
-        cat("Optimal values:\n")
-        cat(sprintf("a = %.6f\n", res$a))
-        cat(sprintf("b = %.6f\n", res$b))
-      } else {
-        cat("Did not converge within the maximum number of iterations.\n")
-        cat(sprintf("Last values:\n a = %.6f\n b = %.6f", res$a, res$b))
-      }
-    })
-  })
+  
   
   observeEvent(input$plot, {
-    lambda_vals <- seq(0.01, 1, length.out = 30)
-    w_vals <- seq(0.01, 1, length.out = 30)
-    
-    grid <- expand.grid(lambda = lambda_vals, w = w_vals)
+    lambda_vals <- seq(0, 1, length.out = 100)
+
+    grid <- expand.grid(lambda = lambda_vals)
     
     P_buy <- numeric(nrow(grid))
     Utility <- numeric(nrow(grid))
@@ -129,7 +107,7 @@ server <- function(input, output) {
     
     for (i in 1:nrow(grid)) {
       lambda <- grid$lambda[i]
-      w <- grid$w[i]
+      w <- input$w
       
       res <- tryCatch(
         solve_ab(lambda, input$p, input$epsilon, input$U_L, input$U_H, w),
@@ -153,44 +131,45 @@ server <- function(input, output) {
     grid$result <- P_buy
     grid$utility <- Utility
     grid$info <- Info
-    
-    model <- lm(result ~ lambda + w, data = grid)
-    grid$predicted <- predict(model, newdata = grid)
-    coefs <- coef(model)
-    eqn <- sprintf("ŷ = %.3f + %.3f·λ + %.3f·w", coefs[1], coefs[2], coefs[3])
-    
+
+
     output$heatmap <- renderPlot({
-      ggplot(grid, aes(x = lambda, y = w, fill = result)) +
-        geom_tile() +
-        scale_fill_viridis_c(name = "p·a + (1-p)·b") +
+      ggplot(grid, aes(x = lambda,  y = result)) +
+        geom_line() +
         labs(
-          title = paste("P(buy) with Linear Fit:", eqn),
+          title = paste("P(buy)"),
           x = expression(lambda),
-          y = "w"
+        ) +
+        theme_minimal()
+    })
+    
+    
+    output$infoPlot <- renderPlot({
+      ggplot(grid, aes(x = lambda,  y = -info) )+
+        geom_line() +
+        labs(
+          title = paste("Info"),
+          x = expression(lambda),
         ) +
         theme_minimal()
     })
     
     output$utilityPlot <- renderPlot({
-      ggplot(grid, aes(x = lambda, y = w, fill = utility)) +
-        geom_tile() +
-        scale_fill_viridis_c(name = "Expected Utility") +
+      ggplot(grid, aes(x = lambda,  y = utility)) +
+        geom_line() +
         labs(
           title = "Expected Utility minus Info Cost",
           x = expression(lambda),
-          y = "w"
         ) +
         theme_minimal()
     })
     
     output$platformPlot <- renderPlot({
-      ggplot(grid, aes(x = lambda, y = w, fill = result*w)) +
-        geom_tile() +
-        scale_fill_viridis_c(name = "Platform profit") +
+      ggplot(grid, aes(x = lambda, y = result*w-info)) +
+        geom_line() +
         labs(
           title = "Platform profit",
           x = expression(lambda),
-          y = "w"
         ) +
         theme_minimal()
     })
