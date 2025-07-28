@@ -99,6 +99,7 @@ server <- function(input, output) {
   observeEvent(input$plot, {
     lambda_vals <- seq(0, 1, length.out = 100)
 
+
     grid <- expand.grid(lambda = lambda_vals)
     
     P_buy <- numeric(nrow(grid))
@@ -149,6 +150,7 @@ server <- function(input, output) {
         geom_line() +
         labs(
           title = paste("Info"),
+
           x = expression(lambda),
         ) +
         theme_minimal()
@@ -166,6 +168,7 @@ server <- function(input, output) {
     
     output$platformPlot <- renderPlot({
       ggplot(grid, aes(x = lambda, y = result*w-info)) +
+
         geom_line() +
         labs(
           title = "Platform profit",
