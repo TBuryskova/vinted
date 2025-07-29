@@ -1,9 +1,7 @@
 library(shiny)
 library(ggplot2)
-<<<<<<< HEAD
 library(dplyr)
-=======
->>>>>>> 316713247bf4a5e5e16cafda42638efab0a6535c
+
 
 ui <- fluidPage(
   titlePanel("Fixed-Point Solver for a and b"),
