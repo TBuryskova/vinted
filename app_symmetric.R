@@ -2,10 +2,18 @@ library(shiny)
 library(ggplot2)
 library(dplyr)
 library(DT) # For interactive tables
+library(viridis) # For better color scales
+
+# Define wide, fixed bounds for lambda and w for the entire app
+# THESE ARE NOW GLOBAL AND ACCESSIBLE TO ALL FUNCTIONS
+lambda_min_global <- 1e-9 # Changed from 0 to a small positive value to avoid issues when lambda=0
+lambda_max_global <- 10    # Set to a sufficiently large value
+w_min_global <- 0      # Allow for negative prices (subsidiies)
+w_max_global <- 10       # Set to a sufficiently large value
 
 # Helper functions
 
-# Function to calculate a_star (from equation 10)
+# Function to calculate a_star (from equation 10) - User's Best Response for 'a'
 a_star_val <- function(lambda, w, UL, epsilon) {
   if (lambda <= 0) return(NA) # Lambda must be positive
   val <- (UL - w - epsilon) / (2 * lambda)
@@ -15,7 +23,7 @@ a_star_val <- function(lambda, w, UL, epsilon) {
   return(pmax(0, pmin(1, 0.5 + val)))
 }
 
-# Function to calculate b_star (from equation 11)
+# Function to calculate b_star (from equation 11) - User's Best Response for 'b'
 b_star_val <- function(lambda, w, UH, epsilon) {
   if (lambda <= 0) return(NA) # Lambda must be positive
   val <- (UH - w - epsilon) / (2 * lambda)
@@ -25,7 +33,7 @@ b_star_val <- function(lambda, w, UH, epsilon) {
   return(pmax(0, pmin(1, 0.5 + val)))
 }
 
-# NEW: Robust and consistent mutual information calculation
+# Robust and consistent mutual information calculation
 calculate_mutual_information <- function(a, b) {
   # Clip a, b to ensure they are within [0, 1] for robustness
   a <- pmax(0, pmin(1, a))
@@ -35,21 +43,25 @@ calculate_mutual_information <- function(a, b) {
   
   # Adjust s and 2-s for denominators if they are exactly zero
   # Using a small positive epsilon to prevent division by zero or log(0)
-  s_denom <- ifelse(s == 0, 1e-9, s) 
-  two_minus_s_denom <- ifelse( (2-s) == 0, 1e-9, 2-s) 
+  s_denom <- ifelse(s == 0, 1e-9, s)  # Use 1e-9 for non-zero denominator
+  two_minus_s_denom <- ifelse( (2-s) == 0, 1e-9, 2-s)  # Use 1e-9 for non-zero denominator
   
   # Helper for individual log terms: prob * log(ratio)
   log_term_safe <- function(prob, numerator, denominator) {
-    if (prob == 0) return(0) # If probability is zero, the term is zero
-    if (denominator <= 0) return(NA) # Should ideally not happen with denom adjustments
+    # CRITICAL FIX: If probability is zero, the term is always zero.
+    # This prevents 0 * log(0) or 0 * log(negative) leading to NaN/Inf.
+    if (prob == 0) return(0) 
+    
+    # Defensive check: if denominator is problematic (though s_denom/two_minus_s_denom should prevent this)
+    if (denominator <= 0) return(NA) 
     
     ratio <- numerator / denominator
     # If ratio is non-positive, clip it to a small positive value before log
+    # This handles cases like 0/X or very small positive numbers.
     if (ratio <= 0) ratio <- 1e-9 
     
     prob * log(ratio)
   }
-  
   mi_term_a1 <- log_term_safe(a, 2*a, s_denom)
   mi_term_a2 <- log_term_safe(1-a, 2*(1-a), two_minus_s_denom)
   mi_term_b1 <- log_term_safe(b, 2*b, s_denom)
@@ -64,8 +76,7 @@ calculate_mutual_information <- function(a, b) {
   return(mi_val)
 }
 
-# Updated: Function to calculate mutual information I(s, \hat{s}) (equation 9)
-# Now uses the common calculate_mutual_information helper
+# Mutual information I(s, \hat{s}) (equation 9)
 Optimal_Mutual_Information <- function(lambda, w, UL, UH, epsilon) {
   a_s <- a_star_val(lambda, w, UL, epsilon)
   b_s <- b_star_val(lambda, w, UH, epsilon)
@@ -75,8 +86,7 @@ Optimal_Mutual_Information <- function(lambda, w, UL, UH, epsilon) {
   return(calculate_mutual_information(a_s, b_s))
 }
 
-# Updated: User Utility Function (equation 8 with a_star, b_star substituted)
-# Now uses the common calculate_mutual_information helper
+# User Utility Function (equation 8 with a_star, b_star substituted)
 User_Utility_Function <- function(lambda, w, UL, UH, epsilon) {
   a_s <- a_star_val(lambda, w, UL, epsilon)
   b_s <- b_star_val(lambda, w, UH, epsilon)
@@ -112,8 +122,14 @@ Unconditional_Prob_Buying <- function(lambda, w, UL, UH, epsilon) {
 }
 
 # Firm Profit Function (equation 13)
+# This function calculates firm profit given lambda and w, assuming user's best response
 Firm_Profit_Function <- function(lambda, w, UL, UH, epsilon) {
-  prob_buying <- Unconditional_Prob_Buying(lambda, w, UL, UH, epsilon)
+  a_s <- a_star_val(lambda, w, UL, epsilon)
+  b_s <- b_star_val(lambda, w, UH, epsilon)
+  
+  if (is.na(a_s) || is.na(b_s)) return(NA)
+  
+  prob_buying <- 0.5 * a_s + 0.5 * b_s
   
   if (is.na(prob_buying)) return(NA)
   
@@ -124,19 +140,18 @@ Firm_Profit_Function <- function(lambda, w, UL, UH, epsilon) {
   return(profit)
 }
 
-# Updated: User Utility Function given direct a,b inputs
-# Now uses the common calculate_mutual_information helper
+# User Utility Function given direct a,b inputs (used for social planner and user first plot)
 User_Utility_Given_ab_lambda_w <- function(a, b, lambda, w, UL, UH, epsilon) {
-  # Validate a, b are within [0, 1] with a small tolerance for floating point
-  a <- pmax(0, pmin(1, a)) # Clip a,b to be within [0,1]
+  # Clip a, b to be within [0,1]
+  a <- pmax(0, pmin(1, a))  
   b <- pmax(0, pmin(1, b))
   
-  if (lambda <= 0 || is.infinite(lambda) || is.na(lambda)) return(NA)
+  if (is.infinite(lambda) || is.na(lambda)) return(NA)
   
   term1_part <- 0.5 * (a * (UL - w) + (1 - a) * epsilon) +
     0.5 * (b * (UH - w) + (1 - b) * epsilon)
   
-  mutual_info_calculated <- calculate_mutual_information(a, b) # Use common MI function
+  mutual_info_calculated <- calculate_mutual_information(a, b)  
   
   if (is.na(mutual_info_calculated)) return(NA)
   
@@ -145,24 +160,85 @@ User_Utility_Given_ab_lambda_w <- function(a, b, lambda, w, UL, UH, epsilon) {
   if (is.na(result) || is.infinite(result)) return(NA)
   return(result)
 }
+Firm_Best_Response_Lambda_W <- function(a, b, UL, UH, epsilon) {
+  # Clip a, b to ensure they are within [0, 1] for robust calculation of MI
+  a <- pmax(0, pmin(1, a))
+  b <- pmax(0, pmin(1, b))
+  
+  # Calculate the constant coefficients for w and lambda in the profit function
+  # Profit = C1_w_coeff * w + C2_lambda_coeff * lambda
+  C1_w_coeff <- 0.5 * (a + b)
+  C2_lambda_coeff <- calculate_mutual_information(a, b)
+  
+  # Handle cases where MI calculation results in NA
+  if (is.na(C2_lambda_coeff)) {
+    return(list(lambda = NA, w = NA, profit = NA, explanation = "Mutual Information calculation resulted in NA."))
+  }
+  
+  optimal_w <- NA
+  optimal_lambda <- NA
+  w_explanation <- ""
+  lambda_explanation <- ""
+  
+  # Determine optimal w based on the sign of its coefficient
+  if (C1_w_coeff > 0) {
+    optimal_w <- w_max_global
+    w_explanation <- paste0("Coefficient of w (0.5*(a+b)) is positive (", round(C1_w_coeff, 3), "), so w is set to w_max_global.")
+  } else if (C1_w_coeff < 0) {
+    optimal_w <- w_min_global
+    w_explanation <- paste0("Coefficient of w (0.5*(a+b)) is negative (", round(C1_w_coeff, 3), "), so w is set to w_min_global.")
+  } else { # C1_w_coeff is 0
+    optimal_w <- w_min_global # Arbitrarily pick min if indifferent
+    w_explanation <- paste0("Coefficient of w (0.5*(a+b)) is zero, so w does not affect profit. Arbitrarily chosen as w_min_global (", w_min_global, ").")
+  }
+  
+  # Determine optimal lambda based on the sign of its coefficient
+  if (C2_lambda_coeff > 0) {
+    optimal_lambda <- lambda_max_global
+    lambda_explanation <- paste0("Coefficient of lambda (MI) is positive (", round(C2_lambda_coeff, 3), "), so lambda is set to lambda_max_global.")
+  } else if (C2_lambda_coeff < 0) {
+    optimal_lambda <- lambda_min_global
+    lambda_explanation <- paste0("Coefficient of lambda (MI) is negative (", round(C2_lambda_coeff, 3), "), so lambda is set to lambda_min_global.")
+  } else { # C2_lambda_coeff is 0
+    optimal_lambda <- lambda_min_global # Arbitrarily pick min if indifferent
+    lambda_explanation <- paste0("Coefficient of lambda (MI) is zero, so lambda does not affect profit. Arbitrarily chosen as lambda_min_global (", lambda_min_global, ").")
+  }
+  
+  # Calculate the profit at these optimal values
+  profit <- C1_w_coeff * optimal_w + optimal_lambda * C2_lambda_coeff
+  
+  return(list(
+    lambda = optimal_lambda,
+    w = optimal_w,
+    profit = profit,
+    explanation = paste(w_explanation, lambda_explanation, sep = "\n")
+  ))
+}
 
-# NEW: Social Welfare Objective Function for optim
-Social_Welfare_Objective <- function(params, UL, UH, epsilon) {
+
+# Social Welfare Objective Function for optim
+Social_Welfare_Objective <- function(params, UL, UH, epsilon) { # Removed fixed bounds from arguments
   a <- params[1]
   b <- params[2]
   lambda <- params[3]
   w <- params[4]
   
   # Return Inf if lambda is non-positive (optim minimizes, so Inf is bad)
-  if (lambda <= 0) return(Inf) 
+  if (lambda < lambda_min_global) return(Inf) # Use global min to avoid values below the allowed minimum
   
-  # Firm Profit based on direct a,b (not a_star from lambda,w)
-  # a and b are decision variables for the social planner
-  prob_buying_sp <- 0.5 * a + 0.5 * b
-  firm_profit_val <- prob_buying_sp * w
+  # Ensure a,b are within bounds for MI calculation
+  a_bounded <- pmax(0, pmin(1, a))
+  b_bounded <- pmax(0, pmin(1, b))
   
-  # User Utility using the robust function for direct a,b, lambda, w
-  user_utility_val <- User_Utility_Given_ab_lambda_w(a, b, lambda, w, UL, UH, epsilon)
+  # Calculate I(a,b) (which depends on a, b, but not lambda, w directly)
+  mi_val_sp <- calculate_mutual_information(a_bounded, b_bounded)
+  if (is.na(mi_val_sp)) return(Inf)
+  
+  # Firm Profit: now includes the lambda * I(a,b) term based on your provided equation 1
+  firm_profit_val <- 0.5 * (a_bounded + b_bounded) * w + lambda * mi_val_sp
+  
+  # User Utility: using the robust function, which already subtracts lambda*MI
+  user_utility_val <- User_Utility_Given_ab_lambda_w(a_bounded, b_bounded, lambda, w, UL, UH, epsilon)
   
   # If any calculation results in NA or Inf, return Inf for minimization
   if (is.na(firm_profit_val) || is.infinite(firm_profit_val) ||
@@ -172,14 +248,13 @@ Social_Welfare_Objective <- function(params, UL, UH, epsilon) {
   
   welfare <- firm_profit_val + user_utility_val
   
-  # optim minimizes, so return negative welfare for maximization
-  return(-welfare)
+  return(-welfare) # optim minimizes, so return negative welfare for maximization
 }
 
 
 # --- Shiny UI ---
 ui <- fluidPage(
-  titlePanel("Optimal Point Plotter for Firm Profit and Scenario Comparison"),
+  titlePanel("Optimal Point Plotter for Strategic Interactions"),
   sidebarLayout(
     sidebarPanel(
       h3("Model Parameters"),
@@ -190,24 +265,30 @@ ui <- fluidPage(
       numericInput("grid_res", "General Grid Resolution (points per axis):", value = 50, min = 10, max = 200)
     ),
     mainPanel(
-      tabsetPanel(id = "main_tabs", # Added an id to reference the tabsetPanel
+      tabsetPanel(id = "main_tabs", 
                   tabPanel("Firm First Plot", 
-                           fluidRow(
-                             column(6, sliderInput("lambda_range", "Lambda (λ) Range (min, max):", min = 0.01, max = 10, value = c(0.01, 10), step = 0.1)),
-                             column(6, sliderInput("w_range", "W Range (min, max):", min = 0, max = 10, value = c(0, 10), step = 0.1))
-                           ),
                            plotOutput("profit_plot", height = "600px")
                   ),
                   tabPanel("User First Plot", 
                            plotOutput("user_utility_plot", height = "600px")
                   ), 
-                  # NEW: Social Planner Tab
-                  tabPanel("Social Planner", 
-                           actionButton("calculate_social_planner", "Calculate Social Planner Optimum"),
+                  tabPanel("Scenario Comparison", 
+                           DTOutput("optimal_values_table"),
                            hr(),
-                           DTOutput("social_planner_table") # Table to show optimization results
+                           fluidRow(
+                             column(12,
+                                    h4("Select Parameters to Plot:"),
+                                    checkboxGroupInput("params_to_plot", label = NULL,
+                                                       choices = c(
+                                                         "Optimal_Lambda", "Optimal_W", "Firm_Profit",
+                                                         "User_Utility", "Welfare", "Uncond_Prob_Buying",
+                                                         "Optimal_Mutual_Info", "Optimal_a_star", "Optimal_b_star"
+                                                       ),
+                                                       inline = TRUE),
+                                    uiOutput("param_plots") # This will be dynamic plot outputs
+                             )
+                           )
                   ),
-                  tabPanel("Scenario Comparison", DTOutput("optimal_values_table")),
                   tabPanel("About", uiOutput("about_text"))
       )
     )
@@ -217,12 +298,13 @@ ui <- fluidPage(
 # --- Shiny Server ---
 server <- function(input, output) {
   
-  # Reactive expression to generate the grid and calculate Objective Function values (Firm First)
+  # Reactive expression to generate the grid and calculate Firm Profit values (Firm First)
+  # Firm as Leader: Firm chooses lambda and w to maximize profit, user responds with a_star, b_star
   grid_data <- reactive({
-    req(input$lambda_range, input$w_range, input$grid_res)
+    req(input$grid_res) # Only depends on grid_res now
     
-    lambda_vals <- seq(input$lambda_range[1], input$lambda_range[2], length.out = input$grid_res)
-    w_vals <- seq(input$w_range[1], input$w_range[2], length.out = input$grid_res)
+    lambda_vals <- seq(lambda_min_global, lambda_max_global, length.out = input$grid_res)
+    w_vals <- seq(w_min_global, w_max_global, length.out = input$grid_res)
     
     plot_df <- expand.grid(lambda = lambda_vals, w = w_vals)
     
@@ -255,74 +337,79 @@ server <- function(input, output) {
     max_row
   })
   
-  # Reactive expression for User First scenario results (fixed lambda_max, w_max)
-  user_first_results <- reactive({
-    # We need to ensure lambda_range and w_range are available before using them
-    req(input$lambda_range, input$w_range) 
-    
-    optimal_lambda_uf <- input$lambda_range[2] # Max lambda from UI slider
-    optimal_w_uf <- input$w_range[2]       # Max w from UI slider
-    
-    a_star_uf <- a_star_val(optimal_lambda_uf, optimal_w_uf, input$UL, input$epsilon)
-    b_star_uf <- b_star_val(optimal_lambda_uf, optimal_w_uf, input$UH, input$epsilon)
-    
-    firm_profit_uf <- (0.5 * a_star_uf + 0.5 * b_star_uf) * optimal_w_uf # Firm profit at these a_star, b_star, w
-    user_utility_uf <- User_Utility_Function(optimal_lambda_uf, optimal_w_uf, input$UL, input$UH, input$epsilon)
-    uncond_prob_buying_uf <- Unconditional_Prob_Buying(optimal_lambda_uf, optimal_w_uf, input$UL, input$UH, input$epsilon)
-    optimal_mutual_info_uf <- Optimal_Mutual_Information(optimal_lambda_uf, optimal_w_uf, input$UL, input$UH, input$epsilon)
-    
-    data.frame(
-      Scenario = "User First",
-      Optimal_Lambda = optimal_lambda_uf,
-      Optimal_W = optimal_w_uf,
-      Firm_Profit = firm_profit_uf,
-      User_Utility = user_utility_uf,
-      Welfare = firm_profit_uf + user_utility_uf,
-      Uncond_Prob_Buying = uncond_prob_buying_uf,
-      Optimal_Mutual_Info = optimal_mutual_info_uf,
-      Optimal_a_star = a_star_uf,
-      Optimal_b_star = b_star_uf,
-      stringsAsFactors = FALSE
-    )
-  })
-  
   # Reactive expression for User First plot data (user utility surface in a-b space)
+  # User as Leader: User chooses a,b. Firm responds with optimal lambda, w. User anticipates this.
   user_first_plot_data <- reactive({
-    # Use a higher resolution for user plot for better visual accuracy
-    user_plot_grid_res <- 100 # Increased resolution
-    req(input$lambda_range, input$w_range) # Ensure these are available
+    req(input$UL, input$UH, input$epsilon) 
     
+    user_plot_grid_res <- input$grid_res # Use general grid res for consistency
     a_vals <- seq(0, 1, length.out = user_plot_grid_res)
     b_vals <- seq(0, 1, length.out = user_plot_grid_res)
     
-    # Use the lambda and w from the user first scenario (max values from sliders)
-    fixed_lambda <- input$lambda_range[2]
-    fixed_w <- input$w_range[2]
-    
     plot_df_user <- expand.grid(a = a_vals, b = b_vals)
     
-    plot_df_user %>%
+    results_df <- plot_df_user %>%
       rowwise() %>%
       mutate(
-        user_utility_val = User_Utility_Given_ab_lambda_w(a, b, fixed_lambda, fixed_w, input$UL, input$UH, input$epsilon)
+        # Call Firm_Best_Response_Lambda_W without bounds arguments (it uses global fixed bounds)
+        firm_br = list(Firm_Best_Response_Lambda_W(a, b, input$UL, input$UH, input$epsilon)),
+        responsive_lambda = firm_br$lambda,
+        responsive_w = firm_br$w,
+        firm_profit_br = firm_br$profit,
+        user_utility_val = User_Utility_Given_ab_lambda_w(a, b, responsive_lambda, responsive_w, input$UL, input$UH, input$epsilon)
       ) %>%
-      ungroup()
+      ungroup() %>%
+      select(-firm_br) # Remove the list column
+    
+    return(results_df)
   })
   
-  # NEW: Reactive for Social Planner results (triggered by button)
-  social_planner_results <- eventReactive(input$calculate_social_planner, {
-    req(input$UL, input$UH, input$epsilon, input$lambda_range, input$w_range)
+  # Reactive expression to find the optimal point for the User First scenario
+  user_first_optimal_point <- reactive({
+    df <- user_first_plot_data() %>% drop_na(user_utility_val)
+    if (nrow(df) == 0) return(NULL)
     
-    # Define bounds for optimization
-    lower_bounds <- c(a = 0, b = 0, lambda = input$lambda_range[1], w = input$w_range[1])
-    upper_bounds <- c(a = 1, b = 1, lambda = input$lambda_range[2], w = input$w_range[2])
+    max_row <- df %>% slice_max(user_utility_val, n = 1, with_ties = FALSE)
     
-    # Initial parameters for optim: midpoints of ranges (or can try other strategies)
+    if (nrow(max_row) > 0) {
+      optimal_a_uf <- max_row$a
+      optimal_b_uf <- max_row$b
+      optimal_lambda_uf <- max_row$responsive_lambda
+      optimal_w_uf <- max_row$responsive_w
+      
+      max_row$Scenario <- "User First"
+      max_row$Optimal_Lambda <- optimal_lambda_uf
+      max_row$Optimal_W <- optimal_w_uf
+      max_row$Firm_Profit <- max_row$firm_profit_br # Firm profit at this BR
+      max_row$User_Utility <- max_row$user_utility_val # User utility at their optimal a,b
+      max_row$Welfare <- max_row$Firm_Profit + max_row$User_Utility
+      max_row$Uncond_Prob_Buying <- 0.5 * optimal_a_uf + 0.5 * optimal_b_uf
+      max_row$Optimal_Mutual_Info <- calculate_mutual_information(optimal_a_uf, optimal_b_uf)
+      max_row$Optimal_a_star <- optimal_a_uf
+      max_row$Optimal_b_star <- optimal_b_uf
+      
+      # Select relevant columns for consistency with other scenarios
+      max_row <- max_row %>%
+        select(Scenario, Optimal_Lambda, Optimal_W, Firm_Profit, User_Utility, Welfare,
+               Uncond_Prob_Buying, Optimal_Mutual_Info, Optimal_a_star, Optimal_b_star)
+    }
+    max_row
+  })
+  
+  # Reactive for Social Planner results (now instant on slider move)
+  social_planner_results <- reactive({
+    req(input$UL, input$UH, input$epsilon)
+    
+    # Define bounds for optimization using the global fixed bounds
+    lower_bounds <- c(a = 0, b = 0, lambda = lambda_min_global, w = w_min_global)
+    upper_bounds <- c(a = 1, b = 1, lambda = lambda_max_global, w = w_max_global)
+    
+    # Initial parameters for optim: midpoints of ranges
     initial_params <- c(
       a = 0.5, 
       b = 0.5, 
-      lambda = (input$lambda_range[1] + input$lambda_range[2]) / 2,
-      w = (input$w_range[1] + input$w_range[2]) / 2
+      lambda = (lambda_min_global + lambda_max_global) / 2,
+      w = (w_min_global + w_max_global) / 2
     )
     
     # Add progress bar for optimization
@@ -347,9 +434,9 @@ server <- function(input, output) {
     optimal_w_sp <- optim_result$par[4]
     
     # Calculate metrics at the found optimal point for consistency
-    sp_firm_profit <- (0.5 * optimal_a_sp + 0.5 * optimal_b_sp) * optimal_w_sp
+    sp_firm_profit <- (0.5 * optimal_a_sp + 0.5 * optimal_b_sp) * optimal_w_sp + optimal_lambda_sp * calculate_mutual_information(optimal_a_sp, optimal_b_sp)
     sp_user_utility <- User_Utility_Given_ab_lambda_w(optimal_a_sp, optimal_b_sp, optimal_lambda_sp, optimal_w_sp, input$UL, input$UH, input$epsilon)
-    sp_welfare <- sp_firm_profit + sp_user_utility # This should match -optim_result$value
+    sp_welfare <- sp_firm_profit + sp_user_utility 
     sp_uncond_prob_buying <- 0.5 * optimal_a_sp + 0.5 * optimal_b_sp
     sp_mutual_info <- calculate_mutual_information(optimal_a_sp, optimal_b_sp)
     
@@ -368,86 +455,8 @@ server <- function(input, output) {
     )
   })
   
-  # Render the plot for Firm First
-  output$profit_plot <- renderPlot({
-    df_clean <- grid_data() %>% drop_na(firm_profit)
-    max_point <- firm_first_optimal_point()
-    
-    p <- ggplot(df_clean, aes(x = lambda, y = w)) +
-      geom_contour_filled(aes(z = firm_profit), alpha = 0.7) +
-      scale_fill_viridis_d(option = "plasma", name = "Firm Profit") +
-      labs(title = "Firm First Optimal Point",
-           subtitle = paste0("U_L = ", input$UL, ", U_H = ", input$UH, ", epsilon = ", input$epsilon),
-           x = "Lambda (λ)",
-           y = "W") +
-      theme_minimal() +
-      theme(legend.position = "bottom", # Changed legend position
-            plot.title = element_text(hjust = 0.5),
-            plot.subtitle = element_text(hjust = 0.5)) +
-      coord_cartesian(xlim = input$lambda_range, ylim = input$w_range)
-    
-    if (!is.null(max_point) && nrow(max_point) > 0) {
-      p <- p + 
-        annotate("point", x = max_point$lambda, y = max_point$w,
-                 color = "red", shape = 8, size = 5, stroke = 2) +
-        annotate("text", x = max_point$lambda, y = max_point$w,
-                 label = paste0("(λ=", round(max_point$lambda, 2), ", w=", round(max_point$w, 2), ")"),
-                 vjust = -1.5, hjust = 0.5, color = "red", size = 5)
-    }
-    p
-  })
-  
-  # Render the plot for User First (Utility in a-b space)
-  output$user_utility_plot <- renderPlot({
-    df_user_clean <- user_first_plot_data() %>% drop_na(user_utility_val)
-    uf_opt_point <- user_first_results()
-    
-    p <- ggplot(df_user_clean, aes(x = a, y = b)) +
-      geom_contour_filled(aes(z = user_utility_val), alpha = 0.7) +
-      scale_fill_viridis_d(option = "cividis", name = "User Utility") + # Changed color scale for distinction
-      labs(title = "User First Optimal Point (User Utility in a-b space)",
-           subtitle = paste0("Fixed λ = ", round(uf_opt_point$Optimal_Lambda, 2), ", Fixed w = ", round(uf_opt_point$Optimal_W, 2),
-                             ", U_L = ", input$UL, ", U_H = ", input$UH, ", epsilon = ", input$epsilon),
-           x = "Probability of Buying (a)",
-           y = "Probability of Buying (b)") +
-      theme_minimal() +
-      theme(legend.position = "bottom",
-            plot.title = element_text(hjust = 0.5),
-            plot.subtitle = element_text(hjust = 0.5)) +
-      coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) # a and b are probabilities [0,1]
-    
-    # Mark the optimal a*, b* for the User First scenario
-    if (!is.null(uf_opt_point) && nrow(uf_opt_point) > 0 && 
-        !is.na(uf_opt_point$Optimal_a_star) && !is.na(uf_opt_point$Optimal_b_star)) {
-      
-      opt_a <- uf_opt_point$Optimal_a_star
-      opt_b <- uf_opt_point$Optimal_b_star
-      
-      p <- p + 
-        annotate("point", x = opt_a, y = opt_b,
-                 color = "red", shape = 8, size = 5, stroke = 2) +
-        annotate("text", x = opt_a, y = opt_b,
-                 label = paste0("(a*=", round(opt_a, 2), ", b*=", round(opt_b, 2), ")"),
-                 vjust = -1.5, hjust = 0.5, color = "red", size = 5)
-    }
-    p
-  })
-  
-  # NEW: Render the Social Planner optimal values output as a DT table
-  output$social_planner_table <- renderDT({
-    sp_df <- social_planner_results() # This reactive will be NULL until button is clicked
-    if (is.null(sp_df) || nrow(sp_df) == 0) {
-      return(datatable(data.frame(Note = "Click 'Calculate Social Planner Optimum' to run the optimization."), 
-                       options = list(dom = 't', paging = FALSE, searching = FALSE)))
-    }
-    datatable(sp_df %>% mutate(across(where(is.numeric), ~ round(., 4))), 
-              options = list(dom = 't', paging = FALSE, searching = FALSE),
-              caption = paste0("Social Planner Optimal Outcome (U_L = ", input$UL, ", U_H = ", input$UH, ", epsilon = ", input$epsilon, ")")
-    )
-  })
-  
-  # Render the overall optimal values output as a DT table
-  output$optimal_values_table <- renderDT({
+  # Reactive for the combined data table and plots
+  optimal_values_data <- reactive({
     firm_first_df <- firm_first_optimal_point()
     if (is.null(firm_first_df) || nrow(firm_first_df) == 0) {
       firm_first_df_for_combine <- data.frame(
@@ -465,17 +474,18 @@ server <- function(input, output) {
                Optimal_a_star = a_star_opt, Optimal_b_star = b_star_opt)
     }
     
-    user_first_df_for_combine <- user_first_results() %>%
-      select(Scenario, Optimal_Lambda, Optimal_W,
-             Firm_Profit, User_Utility, Welfare,
-             Uncond_Prob_Buying, Optimal_Mutual_Info,
-             Optimal_a_star, Optimal_b_star) # Ensure these columns exist for consistency
+    user_first_df_for_combine <- user_first_optimal_point() 
+    if (is.null(user_first_df_for_combine) || nrow(user_first_df_for_combine) == 0) {
+      user_first_df_for_combine <- data.frame(
+        Scenario = "User First", Optimal_Lambda = NA, Optimal_W = NA,
+        Firm_Profit = NA, User_Utility = NA, Welfare = NA,
+        Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
+        Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE
+      )
+    }
     
-    # Get social planner results if they've been calculated
     social_planner_df_raw <- social_planner_results() 
-    
     if (is.null(social_planner_df_raw) || nrow(social_planner_df_raw) == 0) {
-      # Placeholder for social planner if not calculated yet
       social_planner_df_for_combine <- data.frame(
         Scenario = "Social Planner", Optimal_Lambda = NA, Optimal_W = NA,
         Firm_Profit = NA, User_Utility = NA, Welfare = NA,
@@ -493,10 +503,137 @@ server <- function(input, output) {
     combined_df <- bind_rows(firm_first_df_for_combine, user_first_df_for_combine, social_planner_df_for_combine) %>%
       mutate(across(where(is.numeric), ~ round(., 4)))
     
-    datatable(combined_df, options = list(dom = 't', paging = FALSE, searching = FALSE),
+    return(combined_df)
+  })
+  
+  # Render the plot for Firm First
+  output$profit_plot <- renderPlot({
+    df_clean <- grid_data() %>% drop_na(firm_profit)
+    max_point <- firm_first_optimal_point()
+    
+    p <- ggplot(df_clean, aes(x = lambda, y = w)) +
+      geom_contour_filled(aes(z = firm_profit), alpha = 0.7) +
+      scale_fill_viridis_d(option = "plasma", name = "Firm Profit") +
+      labs(title = "Firm First Optimal Point (Firm as Leader, User as Follower)",
+           subtitle = paste0("U_L = ", input$UL, ", U_H = ", input$UH, ", epsilon = ", input$epsilon),
+           x = "Lambda (λ)",
+           y = "W") +
+      theme_minimal() +
+      theme(legend.position = "bottom", 
+            plot.title = element_text(hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5)) +
+      # Use global fixed bounds for plotting range
+      coord_cartesian(xlim = c(lambda_min_global, lambda_max_global), ylim = c(w_min_global, w_max_global))
+    
+    if (!is.null(max_point) && nrow(max_point) > 0) {
+      p <- p + 
+        annotate("point", x = max_point$lambda, y = max_point$w,
+                 color = "red", shape = 8, size = 5, stroke = 2) +
+        annotate("text", x = max_point$lambda, y = max_point$w,
+                 label = paste0("(λ=", round(max_point$lambda, 2), ", w=", round(max_point$w, 2), ")"),
+                 vjust = -1.5, hjust = 0.5, color = "red", size = 5)
+    }
+    p
+  })
+  
+  # Render the plot for User First (Utility in a-b space)
+  output$user_utility_plot <- renderPlot({
+    df_user_clean <- user_first_plot_data() %>% drop_na(user_utility_val)
+    uf_opt_point <- user_first_optimal_point()
+    
+    p <- ggplot(df_user_clean, aes(x = a, y = b)) +
+      geom_contour_filled(aes(z = user_utility_val), alpha = 0.7) +
+      scale_fill_viridis_d(option = "cividis", name = "User Utility") + 
+      labs(title = "User First Optimal Point (User as Leader, Firm as Follower)",
+           subtitle = paste0("Firm chooses λ, w as best response to User's a,b. U_L = ", input$UL, ", U_H = ", input$UH, ", epsilon = ", input$epsilon),
+           x = "User's Chosen a",
+           y = "User's Chosen b") +
+      theme_minimal() +
+      theme(legend.position = "bottom",
+            plot.title = element_text(hjust = 0.5),
+            plot.subtitle = element_text(hjust = 0.5)) +
+      coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) 
+    
+    if (!is.null(uf_opt_point) && nrow(uf_opt_point) > 0 && 
+        !is.na(uf_opt_point$Optimal_a_star) && !is.na(uf_opt_point$Optimal_b_star)) {
+      
+      opt_a <- uf_opt_point$Optimal_a_star
+      opt_b <- uf_opt_point$Optimal_b_star
+      
+      p <- p + 
+        annotate("point", x = opt_a, y = opt_b,
+                 color = "red", shape = 8, size = 5, stroke = 2) +
+        annotate("text", x = opt_a, y = opt_b,
+                 label = paste0("(a*=", round(opt_a, 2), ", b*=", round(opt_b, 2), ")"),
+                 vjust = -1.5, hjust = 0.5, color = "red", size = 5)
+    }
+    p
+  })
+  
+  # Render the overall optimal values output as a DT table
+  output$optimal_values_table <- renderDT({
+    datatable(optimal_values_data(), options = list(dom = 't', paging = FALSE, searching = FALSE),
               caption = paste0("Comparison of Optimal Outcomes (U_L = ", input$UL, ", U_H = ", input$UH, ", epsilon = ", input$epsilon, ")")
     )
   })
+  
+  # Dynamic UI for parameter plots
+  output$param_plots <- renderUI({
+    req(input$params_to_plot) # Ensure at least one checkbox is ticked
+    plot_list <- lapply(input$params_to_plot, function(param_name) {
+      plot_id <- paste0("plot_", param_name)
+      plotOutput(plot_id, height = "300px") # Adjust height as needed
+    })
+    do.call(tagList, plot_list)
+  })
+  
+  # Define renderPlot for each possible parameter
+  all_plot_params <- c(
+    "Optimal_Lambda", "Optimal_W", "Firm_Profit", "User_Utility", "Welfare",
+    "Uncond_Prob_Buying", "Optimal_Mutual_Info", "Optimal_a_star", "Optimal_b_star"
+  )
+  
+  for (param in all_plot_params) {
+    local({
+      my_param <- param # Localize the parameter name for each iteration
+      output_id <- paste0("plot_", my_param)
+      
+      output[[output_id]] <- renderPlot({
+        req(my_param %in% input$params_to_plot) # Only render if checkbox is ticked
+        current_data <- optimal_values_data()
+        req(current_data)
+        if (!(my_param %in% colnames(current_data))) {
+          return(NULL) # Or show a message if column is missing
+        }
+        
+        # Get appropriate y-axis label
+        y_label <- switch(my_param,
+                          "Optimal_Lambda" = "Optimal Lambda (λ)",
+                          "Optimal_W" = "Optimal W",
+                          "Firm_Profit" = "Firm Profit",
+                          "User_Utility" = "User Utility",
+                          "Welfare" = "Total Welfare",
+                          "Uncond_Prob_Buying" = "Unconditional Probability of Buying",
+                          "Optimal_Mutual_Info" = "Optimal Mutual Information",
+                          "Optimal_a_star" = "User's Optimal a*",
+                          "Optimal_b_star" = "User's Optimal b*",
+                          gsub("_", " ", my_param)) # Default if not specified
+        
+        ggplot(current_data, aes_string(x = "Scenario", y = my_param, fill = "Scenario")) +
+          geom_col(position = position_dodge(width = 0.9), color = "black") + # Add black border for clarity
+          labs(title = paste0("Comparison of ", y_label),
+               y = y_label,
+               x = "") + # No x-axis label needed as it's just scenarios
+          theme_minimal() +
+          theme(legend.position = "none",
+                plot.title = element_text(hjust = 0.5, size = 14),
+                axis.text.x = element_text(angle = 45, hjust = 1, size = 10), # Rotate x-axis labels
+                axis.title.y = element_text(size = 12)) +
+          scale_fill_viridis_d(option = "viridis") + # Use a discrete viridis scale for scenarios
+          geom_text(aes_string(label = my_param), vjust = -0.5, size = 3) # Add value labels on top of bars
+      })
+    })
+  }
   
   # About section content
   output$about_text <- renderUI({
@@ -505,29 +642,28 @@ server <- function(input, output) {
       <p>This R Shiny app visualizes different optimization scenarios for a firm and its users.</p>
       <p>The app calculates and displays:</p>
       <ol>
-        <li>The firm's profit (objective function) value across a user-defined grid of $\\lambda$ and $w$ values for the <b>'Firm First'</b> scenario (Platform as leader).</li>
-        <li>The user's utility surface for the <b>'User First'</b> scenario (User as leader), assuming the platform's best response is to set $\\lambda$ and $w$ to their maximum allowed values (based on the UI sliders).</li>
-        <li>The optimal outcome for a <b>'Social Planner'</b>, who aims to maximize the sum of Firm Profit and User Utility simultaneously across $a, b, \\lambda,$ and $w$.</li>
+        <li>The firm's profit (objective function) value across a predefined grid of $\\lambda$ and $w$ values for the <b>'Firm First'</b> scenario (Platform as leader). In this scenario, the firm chooses $\\lambda$ and $w$ to maximize its profit, anticipating the user's optimal buying probabilities ($a^*$ and $b^*$).</li>
+        <li>The user's utility surface for the <b>'User First'</b> scenario (User as leader). Here, the user chooses their desired conditional buying probabilities ($a$ and $b$). The firm, acting as a follower, observes these choices and optimally sets its $\\lambda$ and $w$ to maximize its profit, such that the user's actual best responses match the chosen $a$ and $b$. The user anticipates this firm's best response when making their initial choice of $a$ and $b$.</li>
+        <li>The optimal outcome for a <b>'Social Planner'</b>, who aims to maximize the sum of Firm Profit and User Utility simultaneously across $a, b, \\lambda,$ and $w$. This calculation is performed automatically when parameters change and results are shown in the 'Scenario Comparison' table.</li>
         <li>A comparison of key metrics across all three scenarios in a table.</li>
       </ol>
       <h5>How to Use:</h5>
       <ul>
         <li>Adjust the core parameters $U_L$, $U_H$, and $\\epsilon$ using the sliders on the left.</li>
-        <li>In the 'Firm First Plot' tab, set the desired range for $\\lambda$ and $w$. These ranges define the search space for the 'Firm First' global maximum and also set the upper bounds for $\\lambda$ and $w$ in the 'User First' and 'Social Planner' scenarios.</li>
-        <li>Increase the 'General Grid Resolution' for more detailed surface plots (Firm First, User First). This will increase computation time.</li>
-        <li>For the 'Social Planner' scenario, click the 'Calculate Social Planner Optimum' button to run the multi-parameter optimization.</li>
+        <li>The ranges for $\\lambda$ (0 to 10) and $w$ (0 to 10) are now fixed internally and define the search space for the 'Firm First' global maximum and also act as constraints for the firm's best response in the 'User First' and 'Social Planner' scenarios.</li>
+        <li>Increase the 'General Grid Resolution' for more detailed surface plots (Firm First, User First). This will increase computation time significantly for the 'User First' scenario due to nested calculations.</li>
       </ul>
       <h5>Plot Interpretations:</h5>
       <ul>
-        <li><b>'Firm First Plot':</b> Shows the firm's profit as a function of $\\lambda$ and $w$. Darker colors indicate higher profit. The <span style='color:red;'>&#10038;</span> red star marks the optimal $(\\lambda, w)$ for the firm.</li>
-        <li><b>'User First Plot':</b> Shows the user's utility as a function of conditional buying probabilities $a$ and $b$, given fixed $\\lambda$ and $w$. Darker colors indicate higher utility. The <span style='color:red;'>&#10038;</span> red star marks the optimal $(a^*, b^*)$ for the user under these conditions.</li>
+        <li><b>'Firm First Plot':</b> Shows the firm's profit as a function of $\\lambda$ and $w$. Darker colors indicate higher profit. The <span style='color:red;'>&#10038;</span> red star marks the optimal $(\\lambda, w)$ for the firm. This reflects the firm's best response to the user's behavior.</li>
+        <li><b>'User First Plot':</b> Shows the user's utility as a function of their chosen conditional buying probabilities $a$ and $b$. For each $(a, b)$ pair, the firm's optimal $\\lambda$ and $w$ (as its best response) are calculated and then used to determine the user's utility. Darker colors indicate higher utility. The <span style='color:red;'>&#10038;</span> red star marks the optimal $(a^*, b^*)$ for the user, anticipating the firm's best response.</li>
       </ul>
       <h5>Scenario Comparison Tab:</h5>
-      <p>This tab displays a table summarizing the optimal outcomes for all three scenarios, including optimal parameters, profits, utilities, welfare, and buying probabilities.</p>
+      <p>This tab displays a table summarizing the optimal outcomes for all three scenarios, including optimal parameters, profits, utilities, welfare, and buying probabilities. Below the table, you can select specific parameters to visualize them as bar plots across the different scenarios.</p>
       <h5>Important Notes:</h5>
       <ul>
-        <li>The 'Global Maximum on Grid' for 'Firm First' is the highest point found within the discrete grid. It might not be the exact global maximum if the grid resolution is too coarse or if the true maximum lies outside the defined lambda/w range.</li>
-        <li>The 'User First' scenario's results are based on the specific assumption that the platform's best response is to always set $\\lambda$ and $w$ to their maximum feasible values, as described in the provided theoretical model.</li>
+        <li>The 'Global Maximum on Grid' for 'Firm First' is the highest point found within the discrete grid. It might not be the exact global maximum if the grid resolution is too coarse or if the true maximum lies outside the predefined lambda/w range.</li>
+        <li>The 'User First' scenario involves a nested calculation: for each (a,b) pair on the user's grid, the firm's best response (optimal $\\lambda$, $w$) is calculated. This is computationally intensive. If a specific (a,b) pair cannot be achieved by the firm within the given internal $\\lambda$ and $w$ bounds, its utility will be NA.</li>
         <li>The 'Social Planner' optimization uses a numerical method ('L-BFGS-B'). While generally robust for bounded problems, it may find a local optimum rather than the global one, especially for complex, non-convex functions. The initial parameter guess is set to the mid-point of the parameter ranges.</li>
         <li>Numerical instabilities (e.g., very large/small numbers, division by zero, or invalid logarithm arguments) might occur for certain parameter combinations or at the edges of the plotting/optimization range. Points where calculations result in non-finite values (NA, Inf, NaN) are automatically excluded or penalized.</li>
       </ul>
