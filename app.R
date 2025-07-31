@@ -1,8 +1,9 @@
 library(shiny)
 library(ggplot2)
 library(dplyr)
-library(DT) # For interactive tables
+library(tidyr)
 library(viridis) # For better color scales
+library(reactable)
 
 # Define wide, fixed bounds for lambda and w for the entire app
 # THESE ARE NOW GLOBAL AND ACCESSIBLE TO ALL FUNCTIONS
@@ -273,7 +274,7 @@ ui <- fluidPage(
                            plotOutput("user_utility_plot", height = "600px")
                   ), 
                   tabPanel("Scenario Comparison", 
-                           DTOutput("optimal_values_table"),
+                           reactableOutput("optimal_values_table"),
                            hr(),
                            fluidRow(
                              column(12,
@@ -571,10 +572,9 @@ server <- function(input, output) {
   })
   
   # Render the overall optimal values output as a DT table
-  output$optimal_values_table <- renderDT({
-    datatable(optimal_values_data(), options = list(dom = 't', paging = FALSE, searching = FALSE),
-              caption = paste0("Comparison of Optimal Outcomes (U_L = ", input$UL, ", U_H = ", input$UH, ", epsilon = ", input$epsilon, ")")
-    )
+  output$optimal_values_table <-  renderReactable({
+    reactable(optimal_values_data())
+    
   })
   
   # Dynamic UI for parameter plots
