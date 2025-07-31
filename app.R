@@ -2,7 +2,6 @@ library(shiny)
 library(ggplot2)
 library(dplyr)
 library(tidyr)
-library(viridis) # For better color scales
 library(reactable)
 
 # Define wide, fixed bounds for lambda and w for the entire app
@@ -514,7 +513,6 @@ server <- function(input, output) {
     
     p <- ggplot(df_clean, aes(x = lambda, y = w)) +
       geom_contour_filled(aes(z = firm_profit), alpha = 0.7) +
-      scale_fill_viridis_d(option = "plasma", name = "Firm Profit") +
       labs(title = "Firm First Optimal Point (Firm as Leader, User as Follower)",
            subtitle = paste0("U_L = ", input$UL, ", U_H = ", input$UH, ", epsilon = ", input$epsilon),
            x = "Lambda (λ)",
@@ -544,7 +542,6 @@ server <- function(input, output) {
     
     p <- ggplot(df_user_clean, aes(x = a, y = b)) +
       geom_contour_filled(aes(z = user_utility_val), alpha = 0.7) +
-      scale_fill_viridis_d(option = "cividis", name = "User Utility") + 
       labs(title = "User First Optimal Point (User as Leader, Firm as Follower)",
            subtitle = paste0("Firm chooses λ, w as best response to User's a,b. U_L = ", input$UL, ", U_H = ", input$UH, ", epsilon = ", input$epsilon),
            x = "User's Chosen a",
@@ -629,7 +626,6 @@ server <- function(input, output) {
                 plot.title = element_text(hjust = 0.5, size = 14),
                 axis.text.x = element_text(angle = 45, hjust = 1, size = 10), # Rotate x-axis labels
                 axis.title.y = element_text(size = 12)) +
-          scale_fill_viridis_d(option = "viridis") + # Use a discrete viridis scale for scenarios
           geom_text(aes_string(label = my_param), vjust = -0.5, size = 3) # Add value labels on top of bars
       })
     })
