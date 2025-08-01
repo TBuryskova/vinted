@@ -2,7 +2,6 @@ library(shiny)
 library(ggplot2)
 library(dplyr)
 library(tidyr)
-library(reactable)
 
 # Define wide, fixed bounds for lambda and w for the entire app
 # THESE ARE NOW GLOBAL AND ACCESSIBLE TO ALL FUNCTIONS
@@ -273,7 +272,7 @@ ui <- fluidPage(
                            plotOutput("user_utility_plot", height = "600px")
                   ), 
                   tabPanel("Scenario Comparison", 
-                           reactableOutput("optimal_values_table"),
+                           tableOutput("optimal_values_table"),
                            hr(),
                            fluidRow(
                              column(12,
@@ -457,51 +456,57 @@ server <- function(input, output) {
   
   # Reactive for the combined data table and plots
   optimal_values_data <- reactive({
-    firm_first_df <- firm_first_optimal_point()
-    if (is.null(firm_first_df) || nrow(firm_first_df) == 0) {
-      firm_first_df_for_combine <- data.frame(
-        Scenario = "Firm First", Optimal_Lambda = NA, Optimal_W = NA,
-        Firm_Profit = NA, User_Utility = NA, Welfare = NA,
-        Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
-        Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE
-      )
+    
+    # Firm First: Ensure a single-row data frame is created
+    firm_first_optimal <- firm_first_optimal_point()
+    firm_first_df <- if (is.null(firm_first_optimal) || nrow(firm_first_optimal) == 0) {
+      data.frame(Scenario = "Firm First", Optimal_Lambda = NA, Optimal_W = NA,
+                 Firm_Profit = NA, User_Utility = NA, Welfare = NA,
+                 Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
+                 Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE)
     } else {
-      firm_first_df_for_combine <- firm_first_df %>%
-        mutate(Scenario = "Firm First", Welfare = user_utility + firm_profit) %>%
-        select(Scenario, Optimal_Lambda = lambda, Optimal_W = w,
-               Firm_Profit = firm_profit, User_Utility = user_utility, Welfare,
-               Uncond_Prob_Buying = uncond_prob_buying, Optimal_Mutual_Info = optimal_mutual_info,
-               Optimal_a_star = a_star_opt, Optimal_b_star = b_star_opt)
-    }
-    
-    user_first_df_for_combine <- user_first_optimal_point() 
-    if (is.null(user_first_df_for_combine) || nrow(user_first_df_for_combine) == 0) {
-      user_first_df_for_combine <- data.frame(
-        Scenario = "User First", Optimal_Lambda = NA, Optimal_W = NA,
-        Firm_Profit = NA, User_Utility = NA, Welfare = NA,
-        Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
-        Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE
+      data.frame(
+        Scenario = "Firm First",
+        Optimal_Lambda = firm_first_optimal$lambda,
+        Optimal_W = firm_first_optimal$w,
+        Firm_Profit = firm_first_optimal$firm_profit,
+        User_Utility = firm_first_optimal$user_utility,
+        Welfare = firm_first_optimal$firm_profit + firm_first_optimal$user_utility,
+        Uncond_Prob_Buying = firm_first_optimal$uncond_prob_buying,
+        Optimal_Mutual_Info = firm_first_optimal$optimal_mutual_info,
+        Optimal_a_star = firm_first_optimal$a_star_opt,
+        Optimal_b_star = firm_first_optimal$b_star_opt,
+        stringsAsFactors = FALSE
       )
     }
     
-    social_planner_df_raw <- social_planner_results() 
-    if (is.null(social_planner_df_raw) || nrow(social_planner_df_raw) == 0) {
-      social_planner_df_for_combine <- data.frame(
-        Scenario = "Social Planner", Optimal_Lambda = NA, Optimal_W = NA,
-        Firm_Profit = NA, User_Utility = NA, Welfare = NA,
-        Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
-        Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE
-      )
+    # User First: Ensure a single-row data frame is created
+    user_first_optimal <- user_first_optimal_point()
+    user_first_df <- if (is.null(user_first_optimal) || nrow(user_first_optimal) == 0) {
+      data.frame(Scenario = "User First", Optimal_Lambda = NA, Optimal_W = NA,
+                 Firm_Profit = NA, User_Utility = NA, Welfare = NA,
+                 Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
+                 Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE)
     } else {
-      social_planner_df_for_combine <- social_planner_df_raw %>%
-        select(Scenario, Optimal_Lambda, Optimal_W,
-               Firm_Profit, User_Utility, Welfare,
-               Uncond_Prob_Buying, Optimal_Mutual_Info,
-               Optimal_a_star, Optimal_b_star)
+      # The user_first_optimal_point() function already returns a properly formatted single-row data frame
+      user_first_optimal
     }
     
-    combined_df <- bind_rows(firm_first_df_for_combine, user_first_df_for_combine, social_planner_df_for_combine) %>%
-      mutate(across(where(is.numeric), ~ round(., 4)))
+    # Social Planner: Ensure a single-row data frame is created
+    social_planner_optimal <- social_planner_results()
+    social_planner_df <- if (is.null(social_planner_optimal) || nrow(social_planner_optimal) == 0) {
+      data.frame(Scenario = "Social Planner", Optimal_Lambda = NA, Optimal_W = NA,
+                 Firm_Profit = NA, User_Utility = NA, Welfare = NA,
+                 Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
+                 Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE)
+    } else {
+      # social_planner_results() already returns a single-row data frame
+      social_planner_optimal
+    }
+    
+    # Combine the three single-row data frames
+    combined_df <- bind_rows(firm_first_df, user_first_df, social_planner_df) %>%
+      mutate(across(where(is.numeric), ~ round(., 2)))
     
     return(combined_df)
   })
@@ -569,8 +574,8 @@ server <- function(input, output) {
   })
   
   # Render the overall optimal values output as a DT table
-  output$optimal_values_table <-  renderReactable({
-    reactable(optimal_values_data())
+  output$optimal_values_table <-  renderTable({
+  (optimal_values_data())
     
   })
   
