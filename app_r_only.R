@@ -5,31 +5,19 @@ library(tidyr)
 library(DT) # For a nice-looking summary table
 
 # User-defined parameters
-a <- 0      # utility of buying when X = 0
-b <- 10      # utility of buying when X = 1
-c <- 5      # utility of leaving
+a <- 10     # utility of buying when X = H
+b <- 0    # utility of buying when X = L
+c <- 8     # utility of leaving
 p <- 0.5    # prior
 eps <- 1e-8 # small value to prevent log from collapsing
 
-# Function: posterior belief after a signal
-posterior <- function(r, s) {
-  if (s == 1) {
-    return((r * p) / (r * p + (1 - r) * (1 - p)))
-  } else {
-    return(((1 - r) * p) / ((1 - r) * p + r * (1 - p)))
-  }
-}
 
 # Function: probability of buying
 P_buy <- function(r, w) {
-  p1 <- posterior(r, 1)
-  p0 <- posterior(r, 0)
   
-  u1 <- p1 * b + (1 - p1) * a - w
-  u0 <- p0 * b + (1 - p0) * a - w
-  
-  p_buy <- ifelse(u1 >= c, r * p + (1 - r) * (1 - p), 0) +
-    ifelse(u0 >= c, (1 - r) * p + r * (1 - p), 0)
+  p_buy <- ifelse(r >= (1-p)*(c+w-a)/(-(1-p)*a+p*b+(c+w)*(1-2*p)), 1, 
+                  ifelse(r >= ((c+w)*p-b*p)/((1-p)*a-p*b+(c+w)*(2*p-1)), 0.5,0))
+        
   return(p_buy)
 }
 
@@ -111,6 +99,7 @@ ui <- fluidPage(
 )
 
 # SERVER
+# SERVER
 server <- function(input, output) {
   
   # Reactive grid parameters
@@ -123,13 +112,14 @@ server <- function(input, output) {
   })
   
   r_seq <- reactive({
-    seq(0.5001, 0.9999, length.out = input$grid_size)
+    seq(0.5000, 0.9999, length.out = input$grid_size)
   })
   
   # Principal's best response surface
   grid_data <- reactive({
     req(lambda_seq(), w_seq())
     expand.grid(lambda = lambda_seq(), w = w_seq()) %>%
+      distinct() %>%
       rowwise() %>%
       mutate(
         r_star = optimal_r(lambda, w),
@@ -167,7 +157,8 @@ server <- function(input, output) {
     MI <- mutual_info
     
     result <- lapply(r_seq(), function(r) {
-      grid <- expand.grid(lambda = lambda_seq(), w = w_seq())
+      grid <- expand.grid(lambda = lambda_seq(), w = w_seq()) %>%
+        distinct()
       grid$Pbuy <- mapply(P_buy, r = r, w = grid$w)
       grid$profit <- grid$w * grid$Pbuy + grid$lambda * MI(r)
       opt <- grid[which.max(grid$profit), ]
@@ -256,7 +247,7 @@ server <- function(input, output) {
     
     if (nrow(data$nash) > 0) {
       principal_br_plot <- principal_br_plot +
-        geom_point(data = data$nash, aes(x = lambda_star, y = w_star), 
+        geom_point(data = data$nash, aes(x = lambda_star, y = w_star),
                    color = "black", shape = 4, size = 10, stroke = 2)
     }
     
@@ -272,12 +263,13 @@ server <- function(input, output) {
       r = r_seq(),
       lambda = lambda_seq(),
       w = w_seq()
-    )
+    ) %>%
+      distinct() # Add this line to remove duplicates
     
     # Calculate social welfare for each point in the grid
-    full_grid$social_welfare <- mapply(social_welfare, 
-                                       r = full_grid$r, 
-                                       lambda = full_grid$lambda, 
+    full_grid$social_welfare <- mapply(social_welfare,
+                                       r = full_grid$r,
+                                       lambda = full_grid$lambda,
                                        w = full_grid$w)
     
     # Find the row with the maximum social welfare
@@ -286,45 +278,34 @@ server <- function(input, output) {
     return(optimum_point)
   })
   
+  # Agent First scenario calculation
+  agent_first_optimum <- reactive({
+    df_opt <- optimal_values_r()
+    max_profit_point <- df_opt %>%
+      rowwise() %>%
+      mutate(profit_agent = total_profit(r, lambda_star, w_star)) %>%
+      ungroup() %>%
+      filter(profit_agent == max(profit_agent)) %>%
+      slice(1)
+    
+    return(max_profit_point)
+  })
+  
   output$social_optimum_text <- renderPrint({
     optimum <- social_optimum()
     cat("Social Optimum found at:\n")
     print(optimum)
   })
   
-  output$social_optimum_plot <- renderPlot({
-    optimum <- social_optimum()
-    
-    # Plotting the social welfare as a function of r, for fixed lambda and w at the optimum
-    p_lambda <- optimum$lambda
-    p_w <- optimum$w
-    
-    r_plot_seq <- seq(0.5001, 0.9999, length.out = 100)
-    
-    plot_data <- data.frame(
-      r = r_plot_seq,
-      welfare = mapply(social_welfare, r = r_plot_seq, lambda = p_lambda, w = p_w)
-    )
-    
-    ggplot(plot_data, aes(x = r, y = welfare)) +
-      geom_line(color = "purple", size = 1.2) +
-      geom_point(data = optimum, aes(x = r, y = social_welfare), color = "red", size = 4) +
-      labs(
-        title = paste("Social Welfare at Optimal λ =", round(p_lambda, 3), " and w =", round(p_w, 3)),
-        x = "r (signal accuracy)",
-        y = "Social Welfare"
-      ) +
-      theme_minimal()
-  })
-  
   # Summary table
   summary_data <- reactive({
-    req(nash_data(), social_optimum())
+    req(nash_data(), social_optimum(), agent_first_optimum())
     
     # Get data for each scenario
     principal_opt_point <- grid_data()[which.max(grid_data()$profit), ]
     nash_point <- nash_data()$nash
     social_opt_point <- social_optimum()
+    agent_first_point <- agent_first_optimum()
     
     # Handle the case where no Nash Equilibrium is found
     if (nrow(nash_point) == 0) {
@@ -332,19 +313,23 @@ server <- function(input, output) {
       nash_w <- NA
       nash_lambda <- NA
     } else {
-      # If multiple Nash points are found, take the first one or a representative
-      # one. For simplicity, we'll take the first.
+      # If multiple Nash points are found, take the first one.
       nash_r <- nash_point$r[1]
       nash_w <- nash_point$w_star[1]
       nash_lambda <- nash_point$lambda_star[1]
     }
     
-    # Create a data frame for summary
-    scenario <- c("Principal's Max Profit", "Nash Equilibrium", "Social Optimum")
+    # Extract Agent First values
+    agent_r <- agent_first_point$r
+    agent_w <- agent_first_point$w_star
+    agent_lambda <- agent_first_point$lambda_star
     
-    r_vals <- c(principal_opt_point$r_star, nash_r, social_opt_point$r)
-    w_vals <- c(principal_opt_point$w, nash_w, social_opt_point$w)
-    lambda_vals <- c(principal_opt_point$lambda, nash_lambda, social_opt_point$lambda)
+    # Create a data frame for summary
+    scenario <- c("Principal's Max Profit", "Agent First", "Nash Equilibrium", "Social Optimum")
+    
+    r_vals <- c(principal_opt_point$r_star, agent_r, nash_r, social_opt_point$r)
+    w_vals <- c(principal_opt_point$w, agent_w, nash_w, social_opt_point$w)
+    lambda_vals <- c(principal_opt_point$lambda, agent_lambda, nash_lambda, social_opt_point$lambda)
     
     # Calculate all metrics for each scenario
     pbuy_vals <- mapply(P_buy, r = r_vals, w = w_vals)
@@ -364,9 +349,12 @@ server <- function(input, output) {
     )
   })
   
-  output$summary_table <- renderDT({
-    datatable(summary_data(), options = list(pageLength = 10, dom = 't'))
+  output$summary_table <- renderTable({
+    summary_data()
   })
 }
 
 shinyApp(ui = ui, server = server)
+
+shinyApp(ui = ui, server = server)
+

@@ -6,32 +6,43 @@ library(tidyr)
 # Define wide, fixed bounds for lambda and w for the entire app
 # THESE ARE NOW GLOBAL AND ACCESSIBLE TO ALL FUNCTIONS
 lambda_min_global <- 1e-9 # Changed from 0 to a small positive value to avoid issues when lambda=0
-lambda_max_global <- 10    # Set to a sufficiently large value
-w_min_global <- 0      # Allow for negative prices (subsidiies)
-w_max_global <- 10       # Set to a sufficiently large value
+lambda_max_global <- 10  # Set to a sufficiently large value
+w_min_global <- 0   # Allow for negative prices (subsidiies)
+w_max_global <- 10   # Set to a sufficiently large value
 
 # Helper functions
 
-# Function to calculate a_star (from equation 10) - User's Best Response for 'a'
+# Corrected and numerically stable function to calculate a_star
 a_star_val <- function(lambda, w, UL, epsilon) {
-  if (lambda <= 0) return(NA) # Lambda must be positive
-  val <- (UL - w - epsilon) / (2 * lambda)
+  # Handle case where lambda is zero or very close to it
+  if (lambda <= 1e-9) { 
+    if (UL - w > epsilon) return(1)
+    else return(0)
+  }
   
-  # Clip a_star between 0 and 1
-  if (is.infinite(val) || is.na(val)) return(NA)
-  return(pmax(0, pmin(1, 0.5 + val)))
+  # Numerically stable calculation using log-sum-exp trick
+  exponent <- (epsilon - (UL - w)) / lambda
+  result <- 1 / (1 + exp(exponent))
+  
+  # Ensure the result is within [0, 1] for robustness
+  return(pmax(0, pmin(1, result)))
 }
 
-# Function to calculate b_star (from equation 11) - User's Best Response for 'b'
+# Corrected and numerically stable function to calculate b_star
 b_star_val <- function(lambda, w, UH, epsilon) {
-  if (lambda <= 0) return(NA) # Lambda must be positive
-  val <- (UH - w - epsilon) / (2 * lambda)
+  # Handle case where lambda is zero or very close to it
+  if (lambda <= 1e-9) { 
+    if (UH - w > epsilon) return(1)
+    else return(0)
+  }
   
-  # Clip b_star between 0 and 1
-  if (is.infinite(val) || is.na(val)) return(NA)
-  return(pmax(0, pmin(1, 0.5 + val)))
+  # Numerically stable calculation using log-sum-exp trick
+  exponent <- (epsilon - (UH - w)) / lambda
+  result <- 1 / (1 + exp(exponent))
+  
+  # Ensure the result is within [0, 1] for robustness
+  return(pmax(0, pmin(1, result)))
 }
-
 # Robust and consistent mutual information calculation
 calculate_mutual_information <- function(a, b) {
   # Clip a, b to ensure they are within [0, 1] for robustness
@@ -42,22 +53,21 @@ calculate_mutual_information <- function(a, b) {
   
   # Adjust s and 2-s for denominators if they are exactly zero
   # Using a small positive epsilon to prevent division by zero or log(0)
-  s_denom <- ifelse(s == 0, 1e-9, s)  # Use 1e-9 for non-zero denominator
-  two_minus_s_denom <- ifelse( (2-s) == 0, 1e-9, 2-s)  # Use 1e-9 for non-zero denominator
+  s_denom <- ifelse(s == 0, 1e-9, s) # Use 1e-9 for non-zero denominator
+  two_minus_s_denom <- ifelse( (2-s) == 0, 1e-9, 2-s) # Use 1e-9 for non-zero denominator
   
   # Helper for individual log terms: prob * log(ratio)
   log_term_safe <- function(prob, numerator, denominator) {
     # CRITICAL FIX: If probability is zero, the term is always zero.
     # This prevents 0 * log(0) or 0 * log(negative) leading to NaN/Inf.
-    if (prob == 0) return(0) 
+    if (prob == 0) return(0)
     
     # Defensive check: if denominator is problematic (though s_denom/two_minus_s_denom should prevent this)
-    if (denominator <= 0) return(NA) 
+    if (denominator <= 0) return(NA)
     
     ratio <- numerator / denominator
     # If ratio is non-positive, clip it to a small positive value before log
-    # This handles cases like 0/X or very small positive numbers.
-    if (ratio <= 0) ratio <- 1e-9 
+    if (ratio <= 0) ratio <- 1e-9
     
     prob * log(ratio)
   }
@@ -122,17 +132,23 @@ Unconditional_Prob_Buying <- function(lambda, w, UL, UH, epsilon) {
 
 # Firm Profit Function (equation 13)
 # This function calculates firm profit given lambda and w, assuming user's best response
+# Assuming calculate_mutual_information() is available and correct
 Firm_Profit_Function <- function(lambda, w, UL, UH, epsilon) {
   a_s <- a_star_val(lambda, w, UL, epsilon)
   b_s <- b_star_val(lambda, w, UH, epsilon)
   
   if (is.na(a_s) || is.na(b_s)) return(NA)
   
+  # Calculate the unconditional probability of buying
   prob_buying <- 0.5 * a_s + 0.5 * b_s
   
-  if (is.na(prob_buying)) return(NA)
+  # Calculate the mutual information term
+  mutual_info <- calculate_mutual_information(a_s, b_s)
   
-  profit <- prob_buying * w
+  if (is.na(prob_buying) || is.na(mutual_info)) return(NA)
+  
+  # Correct profit calculation: Revenue from transactions + Revenue from attention
+  profit <- (prob_buying * w) + (lambda * mutual_info)
   
   if (is.infinite(profit) || is.na(profit)) return(NA)
   
@@ -142,7 +158,7 @@ Firm_Profit_Function <- function(lambda, w, UL, UH, epsilon) {
 # User Utility Function given direct a,b inputs (used for social planner and user first plot)
 User_Utility_Given_ab_lambda_w <- function(a, b, lambda, w, UL, UH, epsilon) {
   # Clip a, b to be within [0,1]
-  a <- pmax(0, pmin(1, a))  
+  a <- pmax(0, pmin(1, a)) 
   b <- pmax(0, pmin(1, b))
   
   if (is.infinite(lambda) || is.na(lambda)) return(NA)
@@ -150,7 +166,7 @@ User_Utility_Given_ab_lambda_w <- function(a, b, lambda, w, UL, UH, epsilon) {
   term1_part <- 0.5 * (a * (UL - w) + (1 - a) * epsilon) +
     0.5 * (b * (UH - w) + (1 - b) * epsilon)
   
-  mutual_info_calculated <- calculate_mutual_information(a, b)  
+  mutual_info_calculated <- calculate_mutual_information(a, b) 
   
   if (is.na(mutual_info_calculated)) return(NA)
   
@@ -159,17 +175,16 @@ User_Utility_Given_ab_lambda_w <- function(a, b, lambda, w, UL, UH, epsilon) {
   if (is.na(result) || is.infinite(result)) return(NA)
   return(result)
 }
+
+# Firm's Best Response (lambda, w) to user's choices (a, b)
 Firm_Best_Response_Lambda_W <- function(a, b, UL, UH, epsilon) {
   # Clip a, b to ensure they are within [0, 1] for robust calculation of MI
   a <- pmax(0, pmin(1, a))
   b <- pmax(0, pmin(1, b))
   
-  # Calculate the constant coefficients for w and lambda in the profit function
-  # Profit = C1_w_coeff * w + C2_lambda_coeff * lambda
   C1_w_coeff <- 0.5 * (a + b)
   C2_lambda_coeff <- calculate_mutual_information(a, b)
   
-  # Handle cases where MI calculation results in NA
   if (is.na(C2_lambda_coeff)) {
     return(list(lambda = NA, w = NA, profit = NA, explanation = "Mutual Information calculation resulted in NA."))
   }
@@ -179,7 +194,6 @@ Firm_Best_Response_Lambda_W <- function(a, b, UL, UH, epsilon) {
   w_explanation <- ""
   lambda_explanation <- ""
   
-  # Determine optimal w based on the sign of its coefficient
   if (C1_w_coeff > 0) {
     optimal_w <- w_max_global
     w_explanation <- paste0("Coefficient of w (0.5*(a+b)) is positive (", round(C1_w_coeff, 3), "), so w is set to w_max_global.")
@@ -191,7 +205,6 @@ Firm_Best_Response_Lambda_W <- function(a, b, UL, UH, epsilon) {
     w_explanation <- paste0("Coefficient of w (0.5*(a+b)) is zero, so w does not affect profit. Arbitrarily chosen as w_min_global (", w_min_global, ").")
   }
   
-  # Determine optimal lambda based on the sign of its coefficient
   if (C2_lambda_coeff > 0) {
     optimal_lambda <- lambda_max_global
     lambda_explanation <- paste0("Coefficient of lambda (MI) is positive (", round(C2_lambda_coeff, 3), "), so lambda is set to lambda_max_global.")
@@ -203,7 +216,6 @@ Firm_Best_Response_Lambda_W <- function(a, b, UL, UH, epsilon) {
     lambda_explanation <- paste0("Coefficient of lambda (MI) is zero, so lambda does not affect profit. Arbitrarily chosen as lambda_min_global (", lambda_min_global, ").")
   }
   
-  # Calculate the profit at these optimal values
   profit <- C1_w_coeff * optimal_w + optimal_lambda * C2_lambda_coeff
   
   return(list(
@@ -215,31 +227,24 @@ Firm_Best_Response_Lambda_W <- function(a, b, UL, UH, epsilon) {
 }
 
 
-# Social Welfare Objective Function for optim
-Social_Welfare_Objective <- function(params, UL, UH, epsilon) { # Removed fixed bounds from arguments
+# Social Welfare Objective Function for optim (First-Best)
+Social_Welfare_Objective <- function(params, UL, UH, epsilon) {
   a <- params[1]
   b <- params[2]
   lambda <- params[3]
   w <- params[4]
   
-  # Return Inf if lambda is non-positive (optim minimizes, so Inf is bad)
-  if (lambda < lambda_min_global) return(Inf) # Use global min to avoid values below the allowed minimum
+  if (lambda < lambda_min_global) return(Inf)
   
-  # Ensure a,b are within bounds for MI calculation
   a_bounded <- pmax(0, pmin(1, a))
   b_bounded <- pmax(0, pmin(1, b))
   
-  # Calculate I(a,b) (which depends on a, b, but not lambda, w directly)
   mi_val_sp <- calculate_mutual_information(a_bounded, b_bounded)
   if (is.na(mi_val_sp)) return(Inf)
   
-  # Firm Profit: now includes the lambda * I(a,b) term based on your provided equation 1
   firm_profit_val <- 0.5 * (a_bounded + b_bounded) * w + lambda * mi_val_sp
-  
-  # User Utility: using the robust function, which already subtracts lambda*MI
   user_utility_val <- User_Utility_Given_ab_lambda_w(a_bounded, b_bounded, lambda, w, UL, UH, epsilon)
   
-  # If any calculation results in NA or Inf, return Inf for minimization
   if (is.na(firm_profit_val) || is.infinite(firm_profit_val) ||
       is.na(user_utility_val) || is.infinite(user_utility_val)) {
     return(Inf)
@@ -247,13 +252,73 @@ Social_Welfare_Objective <- function(params, UL, UH, epsilon) { # Removed fixed 
   
   welfare <- firm_profit_val + user_utility_val
   
+  return(-welfare) # optim minimizes
+}
+
+# Objective function to minimize the distance to a mutual best response (Nash Equilibrium)
+Nash_Equilibrium_Objective <- function(params, UL, UH, epsilon) {
+  a <- params[1]
+  b <- params[2]
+  lambda <- params[3]
+  w <- params[4]
+  
+  a_br <- a_star_val(lambda, w, UL, epsilon)
+  b_br <- b_star_val(lambda, w, UH, epsilon)
+  
+  # Call firm best response function and extract values
+  firm_br_result <- Firm_Best_Response_Lambda_W(a, b, UL, UH, epsilon)
+  lambda_br <- firm_br_result$lambda
+  w_br <- firm_br_result$w
+  
+  if (is.na(a_br) || is.na(b_br) || is.na(lambda_br) || is.na(w_br)) {
+    return(Inf)
+  }
+  
+  distance <- (a - a_br)^2 + (b - b_br)^2 +
+    (lambda - lambda_br)^2 + (w - w_br)^2
+  
+  return(distance)
+}
+
+# --- NEW OBJECTIVE FOR SECOND-BEST SOCIAL PLANNER ---
+# Objective function to maximize welfare by controlling only lambda and w.
+# User's behavior (a,b) is a best response to lambda and w.
+Second_Best_Welfare_Objective <- function(params, UL, UH, epsilon) {
+  lambda <- params[1]
+  w <- params[2]
+  
+  # Constraints check: must be within global bounds
+  if (lambda < lambda_min_global || w < w_min_global || lambda > lambda_max_global || w > w_max_global) {
+    return(Inf)
+  }
+  
+  # Calculate user's best responses to the given lambda and w
+  a_s <- a_star_val(lambda, w, UL, epsilon)
+  b_s <- b_star_val(lambda, w, UH, epsilon)
+  
+  if (is.na(a_s) || is.na(b_s)) {
+    return(Inf) # If user's best response is not well-defined, this is a bad choice for the planner
+  }
+  
+  # Calculate firm's profit given these parameters
+  firm_profit <- Firm_Profit_Function(lambda, w, UL, UH, epsilon)
+  # Calculate user's utility given these parameters
+  user_utility <- User_Utility_Function(lambda, w, UL, UH, epsilon)
+  
+  if (is.na(firm_profit) || is.infinite(firm_profit) ||
+      is.na(user_utility) || is.infinite(user_utility)) {
+    return(Inf)
+  }
+  
+  welfare <- firm_profit + user_utility
+  
   return(-welfare) # optim minimizes, so return negative welfare for maximization
 }
 
 
 # --- Shiny UI ---
 ui <- fluidPage(
-  titlePanel("Optimal Point Plotter for Strategic Interactions"),
+  titlePanel("Outcomes for binary signal"),
   sidebarLayout(
     sidebarPanel(
       h3("Model Parameters"),
@@ -264,14 +329,14 @@ ui <- fluidPage(
       numericInput("grid_res", "General Grid Resolution (points per axis):", value = 50, min = 10, max = 200)
     ),
     mainPanel(
-      tabsetPanel(id = "main_tabs", 
-                  tabPanel("Firm First Plot", 
+      tabsetPanel(id = "main_tabs",
+                  tabPanel("Firm First Plot",
                            plotOutput("profit_plot", height = "600px")
                   ),
-                  tabPanel("User First Plot", 
+                  tabPanel("User First Plot",
                            plotOutput("user_utility_plot", height = "600px")
-                  ), 
-                  tabPanel("Scenario Comparison", 
+                  ),
+                  tabPanel("Scenario Comparison",
                            tableOutput("optimal_values_table"),
                            hr(),
                            fluidRow(
@@ -339,7 +404,7 @@ server <- function(input, output) {
   # Reactive expression for User First plot data (user utility surface in a-b space)
   # User as Leader: User chooses a,b. Firm responds with optimal lambda, w. User anticipates this.
   user_first_plot_data <- reactive({
-    req(input$UL, input$UH, input$epsilon) 
+    req(input$UL, input$UH, input$epsilon)
     
     user_plot_grid_res <- input$grid_res # Use general grid res for consistency
     a_vals <- seq(0, 1, length.out = user_plot_grid_res)
@@ -395,23 +460,20 @@ server <- function(input, output) {
     max_row
   })
   
-  # Reactive for Social Planner results (now instant on slider move)
+  # Reactive for Social Planner (First-Best) results
   social_planner_results <- reactive({
     req(input$UL, input$UH, input$epsilon)
     
-    # Define bounds for optimization using the global fixed bounds
     lower_bounds <- c(a = 0, b = 0, lambda = lambda_min_global, w = w_min_global)
     upper_bounds <- c(a = 1, b = 1, lambda = lambda_max_global, w = w_max_global)
     
-    # Initial parameters for optim: midpoints of ranges
     initial_params <- c(
-      a = 0.5, 
-      b = 0.5, 
+      a = 0.5,
+      b = 0.5,
       lambda = (lambda_min_global + lambda_max_global) / 2,
       w = (w_min_global + w_max_global) / 2
     )
     
-    # Add progress bar for optimization
     withProgress(message = 'Calculating Social Planner Optimum...', value = 0.5, {
       optim_result <- optim(
         par = initial_params,
@@ -422,25 +484,23 @@ server <- function(input, output) {
         UL = input$UL,
         UH = input$UH,
         epsilon = input$epsilon,
-        control = list(factr = 1e7) # For convergence tolerance; higher is more tolerant
+        control = list(factr = 1e7)
       )
     })
     
-    # Extract results
     optimal_a_sp <- optim_result$par[1]
     optimal_b_sp <- optim_result$par[2]
     optimal_lambda_sp <- optim_result$par[3]
     optimal_w_sp <- optim_result$par[4]
     
-    # Calculate metrics at the found optimal point for consistency
     sp_firm_profit <- (0.5 * optimal_a_sp + 0.5 * optimal_b_sp) * optimal_w_sp + optimal_lambda_sp * calculate_mutual_information(optimal_a_sp, optimal_b_sp)
     sp_user_utility <- User_Utility_Given_ab_lambda_w(optimal_a_sp, optimal_b_sp, optimal_lambda_sp, optimal_w_sp, input$UL, input$UH, input$epsilon)
-    sp_welfare <- sp_firm_profit + sp_user_utility 
+    sp_welfare <- sp_firm_profit + sp_user_utility
     sp_uncond_prob_buying <- 0.5 * optimal_a_sp + 0.5 * optimal_b_sp
     sp_mutual_info <- calculate_mutual_information(optimal_a_sp, optimal_b_sp)
     
     data.frame(
-      Scenario = "Social Planner",
+      Scenario = "Social Planner (First-Best)",
       Optimal_Lambda = optimal_lambda_sp,
       Optimal_W = optimal_w_sp,
       Firm_Profit = sp_firm_profit,
@@ -454,10 +514,123 @@ server <- function(input, output) {
     )
   })
   
+  # Reactive for the Nash Equilibrium results
+  nash_equilibrium_results <- reactive({
+    req(input$UL, input$UH, input$epsilon)
+    
+    lower_bounds <- c(a = 0, b = 0, lambda = lambda_min_global, w = w_min_global)
+    upper_bounds <- c(a = 1, b = 1, lambda = lambda_max_global, w = w_max_global)
+    
+    initial_params <- c(
+      a = 0.5,
+      b = 0.5,
+      lambda = (lambda_min_global + lambda_max_global) / 2,
+      w = (w_min_global + w_max_global) / 2
+    )
+    
+    withProgress(message = 'Calculating Nash Equilibrium...', value = 0.5, {
+      optim_result <- optim(
+        par = initial_params,
+        fn = Nash_Equilibrium_Objective,
+        method = "L-BFGS-B",
+        lower = lower_bounds,
+        upper = upper_bounds,
+        UL = input$UL,
+        UH = input$UH,
+        epsilon = input$epsilon,
+        control = list(factr = 1e7)
+      )
+    })
+    
+    optimal_a_ne <- optim_result$par[1]
+    optimal_b_ne <- optim_result$par[2]
+    optimal_lambda_ne <- optim_result$par[3]
+    optimal_w_ne <- optim_result$par[4]
+    
+    ne_firm_profit <- Firm_Profit_Function(optimal_lambda_ne, optimal_w_ne, input$UL, input$UH, input$epsilon)
+    ne_user_utility <- User_Utility_Function(optimal_lambda_ne, optimal_w_ne, input$UL, input$UH, input$epsilon)
+    ne_welfare <- ne_firm_profit + ne_user_utility
+    ne_uncond_prob_buying <- Unconditional_Prob_Buying(optimal_lambda_ne, optimal_w_ne, input$UL, input$UH, input$epsilon)
+    ne_mutual_info <- Optimal_Mutual_Information(optimal_lambda_ne, optimal_w_ne, input$UL, input$UH, input$epsilon)
+    
+    data.frame(
+      Scenario = "Nash Equilibrium",
+      Optimal_Lambda = optimal_lambda_ne,
+      Optimal_W = optimal_w_ne,
+      Firm_Profit = ne_firm_profit,
+      User_Utility = ne_user_utility,
+      Welfare = ne_welfare,
+      Uncond_Prob_Buying = ne_uncond_prob_buying,
+      Optimal_Mutual_Info = ne_mutual_info,
+      Optimal_a_star = optimal_a_ne,
+      Optimal_b_star = optimal_b_ne,
+      stringsAsFactors = FALSE
+    )
+  })
+  
+  # --- NEW REACTIVE FOR SECOND-BEST SOCIAL PLANNER ---
+  second_best_social_planner_results <- reactive({
+    req(input$UL, input$UH, input$epsilon)
+    
+    # Define bounds for optimization. Only lambda and w are controlled.
+    lower_bounds <- c(lambda = lambda_min_global, w = w_min_global)
+    upper_bounds <- c(lambda = lambda_max_global, w = w_max_global)
+    
+    # Initial guess
+    initial_params <- c(
+      lambda = (lambda_min_global + lambda_max_global) / 2,
+      w = (w_min_global + w_max_global) / 2
+    )
+    
+    withProgress(message = 'Calculating Second-Best Social Planner Optimum...', value = 0.5, {
+      optim_result <- optim(
+        par = initial_params,
+        fn = Second_Best_Welfare_Objective,
+        method = "L-BFGS-B",
+        lower = lower_bounds,
+        upper = upper_bounds,
+        UL = input$UL,
+        UH = input$UH,
+        epsilon = input$epsilon,
+        control = list(factr = 1e7)
+      )
+    })
+    
+    # Extract results
+    optimal_lambda_sb <- optim_result$par[1]
+    optimal_w_sb <- optim_result$par[2]
+    
+    # Calculate the resulting user choices using the *correct* function calls
+    # a_star requires UL, b_star requires UH
+    optimal_a_sb <- a_star_val(optimal_lambda_sb, optimal_w_sb, input$UL, input$epsilon)
+    optimal_b_sb <- b_star_val(optimal_lambda_sb, optimal_w_sb, input$UH, input$epsilon)
+    
+    # Calculate all metrics at the found optimal point
+    sb_firm_profit <- Firm_Profit_Function(optimal_lambda_sb, optimal_w_sb, input$UL, input$UH, input$epsilon)
+    sb_user_utility <- User_Utility_Function(optimal_lambda_sb, optimal_w_sb, input$UL, input$UH, input$epsilon)
+    sb_welfare <- sb_firm_profit + sb_user_utility
+    sb_uncond_prob_buying <- Unconditional_Prob_Buying(optimal_lambda_sb, optimal_w_sb, input$UL, input$UH, input$epsilon)
+    sb_mutual_info <- Optimal_Mutual_Information(optimal_lambda_sb, optimal_w_sb, input$UL, input$UH, input$epsilon)
+    
+    data.frame(
+      Scenario = "Social Planner (Second-Best)",
+      Optimal_Lambda = optimal_lambda_sb,
+      Optimal_W = optimal_w_sb,
+      Firm_Profit = sb_firm_profit,
+      User_Utility = sb_user_utility,
+      Welfare = sb_welfare,
+      Uncond_Prob_Buying = sb_uncond_prob_buying,
+      Optimal_Mutual_Info = sb_mutual_info,
+      Optimal_a_star = optimal_a_sb,
+      Optimal_b_star = optimal_b_sb,
+      stringsAsFactors = FALSE
+    )
+  })
+  
   # Reactive for the combined data table and plots
   optimal_values_data <- reactive({
     
-    # Firm First: Ensure a single-row data frame is created
+    # Firm First
     firm_first_optimal <- firm_first_optimal_point()
     firm_first_df <- if (is.null(firm_first_optimal) || nrow(firm_first_optimal) == 0) {
       data.frame(Scenario = "Firm First", Optimal_Lambda = NA, Optimal_W = NA,
@@ -480,7 +653,7 @@ server <- function(input, output) {
       )
     }
     
-    # User First: Ensure a single-row data frame is created
+    # User First
     user_first_optimal <- user_first_optimal_point()
     user_first_df <- if (is.null(user_first_optimal) || nrow(user_first_optimal) == 0) {
       data.frame(Scenario = "User First", Optimal_Lambda = NA, Optimal_W = NA,
@@ -488,24 +661,44 @@ server <- function(input, output) {
                  Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
                  Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE)
     } else {
-      # The user_first_optimal_point() function already returns a properly formatted single-row data frame
       user_first_optimal
     }
     
-    # Social Planner: Ensure a single-row data frame is created
+    # Social Planner (First-Best)
     social_planner_optimal <- social_planner_results()
     social_planner_df <- if (is.null(social_planner_optimal) || nrow(social_planner_optimal) == 0) {
-      data.frame(Scenario = "Social Planner", Optimal_Lambda = NA, Optimal_W = NA,
+      data.frame(Scenario = "Social Planner (First-Best)", Optimal_Lambda = NA, Optimal_W = NA,
                  Firm_Profit = NA, User_Utility = NA, Welfare = NA,
                  Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
                  Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE)
     } else {
-      # social_planner_results() already returns a single-row data frame
       social_planner_optimal
     }
     
-    # Combine the three single-row data frames
-    combined_df <- bind_rows(firm_first_df, user_first_df, social_planner_df) %>%
+    # Nash Equilibrium
+    nash_eq_optimal <- nash_equilibrium_results()
+    nash_eq_df <- if (is.null(nash_eq_optimal) || nrow(nash_eq_optimal) == 0) {
+      data.frame(Scenario = "Nash Equilibrium", Optimal_Lambda = NA, Optimal_W = NA,
+                 Firm_Profit = NA, User_Utility = NA, Welfare = NA,
+                 Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
+                 Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE)
+    } else {
+      nash_eq_optimal
+    }
+    
+    # Second-Best Social Planner
+    sb_social_planner_optimal <- second_best_social_planner_results()
+    sb_social_planner_df <- if (is.null(sb_social_planner_optimal) || nrow(sb_social_planner_optimal) == 0) {
+      data.frame(Scenario = "Social Planner (Second-Best)", Optimal_Lambda = NA, Optimal_W = NA,
+                 Firm_Profit = NA, User_Utility = NA, Welfare = NA,
+                 Uncond_Prob_Buying = NA, Optimal_Mutual_Info = NA,
+                 Optimal_a_star = NA, Optimal_b_star = NA, stringsAsFactors = FALSE)
+    } else {
+      sb_social_planner_optimal
+    }
+    
+    # Combine all five data frames
+    combined_df <- bind_rows(firm_first_df, user_first_df, social_planner_df, nash_eq_df, sb_social_planner_df) %>%
       mutate(across(where(is.numeric), ~ round(., 2)))
     
     return(combined_df)
@@ -523,14 +716,13 @@ server <- function(input, output) {
            x = "Lambda (λ)",
            y = "W") +
       theme_minimal() +
-      theme(legend.position = "bottom", 
+      theme(legend.position = "bottom",
             plot.title = element_text(hjust = 0.5),
             plot.subtitle = element_text(hjust = 0.5)) +
-      # Use global fixed bounds for plotting range
       coord_cartesian(xlim = c(lambda_min_global, lambda_max_global), ylim = c(w_min_global, w_max_global))
     
     if (!is.null(max_point) && nrow(max_point) > 0) {
-      p <- p + 
+      p <- p +
         annotate("point", x = max_point$lambda, y = max_point$w,
                  color = "red", shape = 8, size = 5, stroke = 2) +
         annotate("text", x = max_point$lambda, y = max_point$w,
@@ -555,15 +747,15 @@ server <- function(input, output) {
       theme(legend.position = "bottom",
             plot.title = element_text(hjust = 0.5),
             plot.subtitle = element_text(hjust = 0.5)) +
-      coord_cartesian(xlim = c(0, 1), ylim = c(0, 1)) 
+      coord_cartesian(xlim = c(0, 1), ylim = c(0, 1))
     
-    if (!is.null(uf_opt_point) && nrow(uf_opt_point) > 0 && 
+    if (!is.null(uf_opt_point) && nrow(uf_opt_point) > 0 &&
         !is.na(uf_opt_point$Optimal_a_star) && !is.na(uf_opt_point$Optimal_b_star)) {
       
       opt_a <- uf_opt_point$Optimal_a_star
       opt_b <- uf_opt_point$Optimal_b_star
       
-      p <- p + 
+      p <- p +
         annotate("point", x = opt_a, y = opt_b,
                  color = "red", shape = 8, size = 5, stroke = 2) +
         annotate("text", x = opt_a, y = opt_b,
@@ -574,8 +766,8 @@ server <- function(input, output) {
   })
   
   # Render the overall optimal values output as a DT table
-  output$optimal_values_table <-  renderTable({
-  (optimal_values_data())
+  output$optimal_values_table <- renderTable({
+    (optimal_values_data())
     
   })
   
@@ -619,19 +811,19 @@ server <- function(input, output) {
                           "Optimal_Mutual_Info" = "Optimal Mutual Information",
                           "Optimal_a_star" = "User's Optimal a*",
                           "Optimal_b_star" = "User's Optimal b*",
-                          gsub("_", " ", my_param)) # Default if not specified
+                          gsub("_", " ", my_param))
         
         ggplot(current_data, aes_string(x = "Scenario", y = my_param, fill = "Scenario")) +
-          geom_col(position = position_dodge(width = 0.9), color = "black") + # Add black border for clarity
+          geom_col(position = position_dodge(width = 0.9), color = "black") +
           labs(title = paste0("Comparison of ", y_label),
                y = y_label,
-               x = "") + # No x-axis label needed as it's just scenarios
+               x = "") +
           theme_minimal() +
           theme(legend.position = "none",
                 plot.title = element_text(hjust = 0.5, size = 14),
-                axis.text.x = element_text(angle = 45, hjust = 1, size = 10), # Rotate x-axis labels
+                axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
                 axis.title.y = element_text(size = 12)) +
-          geom_text(aes_string(label = my_param), vjust = -0.5, size = 3) # Add value labels on top of bars
+          geom_text(aes_string(label = my_param), vjust = -0.5, size = 3)
       })
     })
   }
@@ -645,28 +837,21 @@ server <- function(input, output) {
       <ol>
         <li>The firm's profit (objective function) value across a predefined grid of $\\lambda$ and $w$ values for the <b>'Firm First'</b> scenario (Platform as leader). In this scenario, the firm chooses $\\lambda$ and $w$ to maximize its profit, anticipating the user's optimal buying probabilities ($a^*$ and $b^*$).</li>
         <li>The user's utility surface for the <b>'User First'</b> scenario (User as leader). Here, the user chooses their desired conditional buying probabilities ($a$ and $b$). The firm, acting as a follower, observes these choices and optimally sets its $\\lambda$ and $w$ to maximize its profit, such that the user's actual best responses match the chosen $a$ and $b$. The user anticipates this firm's best response when making their initial choice of $a$ and $b$.</li>
-        <li>The optimal outcome for a <b>'Social Planner'</b>, who aims to maximize the sum of Firm Profit and User Utility simultaneously across $a, b, \\lambda,$ and $w$. This calculation is performed automatically when parameters change and results are shown in the 'Scenario Comparison' table.</li>
-        <li>A comparison of key metrics across all three scenarios in a table.</li>
+        <li>The optimal outcome for a <b>'Social Planner (First-Best)'</b>, who aims to maximize the sum of Firm Profit and User Utility simultaneously across $a, b, \\lambda,$ and $w$. This is a theoretical benchmark.</li>
+        <li>The optimal outcome for a <b>'Social Planner (Second-Best)'</b>, who maximizes total welfare by choosing only $\\lambda$ and $w$ and anticipating the user's best response behavior.</li>
+        <li>The <b>'Nash Equilibrium'</b>, where both the firm's choices and the user's choices are mutual best responses to each other.</li>
+        <li>A comparison of key metrics across all scenarios in a table.</li>
       </ol>
       <h5>How to Use:</h5>
       <ul>
         <li>Adjust the core parameters $U_L$, $U_H$, and $\\epsilon$ using the sliders on the left.</li>
-        <li>The ranges for $\\lambda$ (0 to 10) and $w$ (0 to 10) are now fixed internally and define the search space for the 'Firm First' global maximum and also act as constraints for the firm's best response in the 'User First' and 'Social Planner' scenarios.</li>
-        <li>Increase the 'General Grid Resolution' for more detailed surface plots (Firm First, User First). This will increase computation time significantly for the 'User First' scenario due to nested calculations.</li>
+        <li>The ranges for $\\lambda$ (0 to 10) and $w$ (0 to 10) are fixed internally and define the search space for all optimizations.</li>
+        <li>Increase the 'General Grid Resolution' for more detailed surface plots. This will increase computation time.</li>
       </ul>
-      <h5>Plot Interpretations:</h5>
-      <ul>
-        <li><b>'Firm First Plot':</b> Shows the firm's profit as a function of $\\lambda$ and $w$. Darker colors indicate higher profit. The <span style='color:red;'>&#10038;</span> red star marks the optimal $(\\lambda, w)$ for the firm. This reflects the firm's best response to the user's behavior.</li>
-        <li><b>'User First Plot':</b> Shows the user's utility as a function of their chosen conditional buying probabilities $a$ and $b$. For each $(a, b)$ pair, the firm's optimal $\\lambda$ and $w$ (as its best response) are calculated and then used to determine the user's utility. Darker colors indicate higher utility. The <span style='color:red;'>&#10038;</span> red star marks the optimal $(a^*, b^*)$ for the user, anticipating the firm's best response.</li>
-      </ul>
-      <h5>Scenario Comparison Tab:</h5>
-      <p>This tab displays a table summarizing the optimal outcomes for all three scenarios, including optimal parameters, profits, utilities, welfare, and buying probabilities. Below the table, you can select specific parameters to visualize them as bar plots across the different scenarios.</p>
       <h5>Important Notes:</h5>
       <ul>
-        <li>The 'Global Maximum on Grid' for 'Firm First' is the highest point found within the discrete grid. It might not be the exact global maximum if the grid resolution is too coarse or if the true maximum lies outside the predefined lambda/w range.</li>
-        <li>The 'User First' scenario involves a nested calculation: for each (a,b) pair on the user's grid, the firm's best response (optimal $\\lambda$, $w$) is calculated. This is computationally intensive. If a specific (a,b) pair cannot be achieved by the firm within the given internal $\\lambda$ and $w$ bounds, its utility will be NA.</li>
-        <li>The 'Social Planner' optimization uses a numerical method ('L-BFGS-B'). While generally robust for bounded problems, it may find a local optimum rather than the global one, especially for complex, non-convex functions. The initial parameter guess is set to the mid-point of the parameter ranges.</li>
-        <li>Numerical instabilities (e.g., very large/small numbers, division by zero, or invalid logarithm arguments) might occur for certain parameter combinations or at the edges of the plotting/optimization range. Points where calculations result in non-finite values (NA, Inf, NaN) are automatically excluded or penalized.</li>
+        <li>The 'Social Planner (First-Best)', 'Nash Equilibrium', and 'Social Planner (Second-Best)' scenarios all rely on numerical optimization ('L-BFGS-B'). While generally robust, it may find a local optimum rather than the global one, especially for complex functions.</li>
+        <li>Numerical instabilities (e.g., very large/small numbers, division by zero, or invalid logarithm arguments) might occur for certain parameter combinations. Points where calculations result in non-finite values (NA, Inf, NaN) are automatically excluded or penalized.</li>
       </ul>
     ")
   })
