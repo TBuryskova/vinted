@@ -10,42 +10,39 @@ UL <- 0       # utility of buying when X = L
 epsilon <- 8  # utility of leaving
 p <- 0.5      # prior
 eps <- 10^(-3) # Small epsilon for numerical stability
-lambda_range <- c(0,0.3)
-w_range <- c(0,0.1)
-
 
 # Function: probability of buying (P_buy)
-P_buy <- function(r, w) {
+P_buy <- function(r, w, beta_sensitivity) {
   # Posterior when signal = H (High)
   prob_Y_H <- r * p + (1 - r) * (1 - p)
   posterior_H_given_Y_H <- (r * p) / prob_Y_H
   
   # Expected utility from action H given signal H (Principal buys)
-  EU_buy_given_signal_H <- posterior_H_given_Y_H * (UH - w) + (1 - posterior_H_given_Y_H) * (UL - w)
+  EU_H_given_signal_H <- posterior_H_given_Y_H * (UH - w) + (1 - posterior_H_given_Y_H) * (UL - w)
   
   # Posterior when signal = L (Low)
   prob_Y_L <- (1 - r) * p + r * (1 - p)
   posterior_H_given_Y_L <- ((1 - r) * p) / prob_Y_L
   
   # Expected utility from action H given signal L (Principal buys)
-  EU_buy_given_signal_L <- posterior_H_given_Y_L * (UH - w) + (1 - posterior_H_given_Y_L) * (UL - w)
+  EU_H_given_signal_L <- posterior_H_given_Y_L * (UH - w) + (1 - posterior_H_given_Y_L) * (UL - w)
   
-  # Determine if Principal buys based on signal H or L
-  # If EU of buying is >= epsilon (utility of leaving), principal buys.
-  # Otherwise, principal leaves.
+  # Utility difference for action H (buying) vs. action L (leaving/epsilon)
+  # EU_L_given_signal_H/L is simply epsilon, as leaving has a fixed utility
+  utility_diff_H <- EU_H_given_signal_H - epsilon
+  utility_diff_L <- EU_H_given_signal_L - epsilon
   
-  # P_buy when signal is H
-  buy_if_signal_H <- ifelse(EU_buy_given_signal_H >= epsilon, 1, 0)
-  
-  # P_buy when signal is L
-  buy_if_signal_L <- ifelse(EU_buy_given_signal_L >= epsilon, 1, 0)
+  # Continuous probability of buying using a sigmoid function
+  # beta_sensitivity controls how 'sharp' the transition is. Higher beta means closer to binary.
+  prob_buy_given_signal_H <- 1 / (1 + exp(-beta_sensitivity * utility_diff_H))
+  prob_buy_given_signal_L <- 1 / (1 + exp(-beta_sensitivity * utility_diff_L))
   
   # Overall probability of buying, considering the probability of each signal
   # P(Buy) = P(Buy|Signal=H)P(Signal=H) + P(Buy|Signal=L)P(Signal=L)
-  # P(Signal=H) = prob_Y_H
-  # P(Signal=L) = prob_Y_L
+  prob_Y_H <- r * p + (1 - r) * (1 - p)
+  prob_Y_L <- (1 - r) * p + r * (1 - p)
   
-  p_buy <- buy_if_signal_H * prob_Y_H + buy_if_signal_L * prob_Y_L
+  p_buy <- prob_buy_given_signal_H * prob_Y_H + prob_buy_given_signal_L * prob_Y_L
   
   return(p_buy)
 }
@@ -78,25 +75,23 @@ mutual_info_bernoulli <- function(p, r) {
 }
 
 # Total profit of the agent
-total_profit <- function(r, lambda, w) {
-  # If r=0.5, mutual information is 0, so agent's profit is w * P_buy(0.5, w).
-  # If r != 0.5 and lambda is infinite, profit will be infinite.
-  
+total_profit <- function(r, lambda, w, beta_sensitivity) {
+  # If r=0.5, mutual information is 0.
   if (r == 0.5) { 
-    profit <- w * P_buy(r, w) 
+    profit <- w * P_buy(r, w, beta_sensitivity) 
   } else {
-    profit <- w * P_buy(r, w) + lambda * mutual_info_bernoulli(p, r)
+    profit <- w * P_buy(r, w, beta_sensitivity) + lambda * mutual_info_bernoulli(p, r)
   }
-  
   return(profit)
 }
 
 
 # Total utility of the principal
-total_utility <- function(r, lambda, w) {
-  # Check for the condition UH - epsilon < w
+total_utility <- function(r, lambda, w, beta_sensitivity) {
+  # The condition UH - epsilon < w is a hard constraint. If it holds,
+  # the principal's best outcome is always 'epsilon' (leaving), regardless of signal or beta.
   if (UH - epsilon < w) {
-    EU_total <- epsilon # Principal always chooses to leave, gets epsilon
+    EU_total <- epsilon 
   } else {
     # Posterior probability when signal = H (High)
     prob_Y_H <- r * p + (1 - r) * (1 - p)
@@ -106,27 +101,28 @@ total_utility <- function(r, lambda, w) {
     prob_Y_L <- (1 - r) * p + r * (1 - p)
     posterior_H_given_Y_L <- ifelse(prob_Y_L == 0, 0, ((1 - r) * p) / prob_Y_L)
     
-    # Expected utility from action H (High) given signal H
+    # Expected utility from action H (buy) given signal H
     EU_H_given_signal_H <- posterior_H_given_Y_H * (UH - w) + (1 - posterior_H_given_Y_H) * (UL - w)
-    
-    # Expected utility from action L (Low) given signal H (Action L is to leave, utility epsilon)
+    # Expected utility from action L (leave) given signal H
     EU_L_given_signal_H <- epsilon
     
-    # Expected utility from action H given signal L
+    # Expected utility from action H (buy) given signal L
     EU_H_given_signal_L <- posterior_H_given_Y_L * (UH - w) + (1 - posterior_H_given_Y_L) * (UL - w)
-    
-    # Expected utility from action L given signal L (Action L is to leave, utility epsilon)
+    # Expected utility from action L (leave) given signal L
     EU_L_given_signal_L <- epsilon
     
-    # Optimal action given signal H
-    EU_optimal_given_signal_H <- max(EU_H_given_signal_H, EU_L_given_signal_H)
+    # Calculate the probability of buying for each signal using sigmoid
+    prob_buy_given_signal_H <- 1 / (1 + exp(-beta_sensitivity * (EU_H_given_signal_H - EU_L_given_signal_H)))
+    prob_buy_given_signal_L <- 1 / (1 + exp(-beta_sensitivity * (EU_H_given_signal_L - EU_L_given_signal_L)))
     
-    # Optimal action given signal L
-    EU_optimal_given_signal_L <- max(EU_H_given_signal_L, EU_L_given_signal_L)
+    # Principal's expected utility given signal (with continuous choice)
+    # This reflects the principal's utility *given their probabilistic decision rule*
+    EU_principal_given_signal_H <- prob_buy_given_signal_H * EU_H_given_signal_H + (1 - prob_buy_given_signal_H) * EU_L_given_signal_H
+    EU_principal_given_signal_L <- prob_buy_given_signal_L * EU_H_given_signal_L + (1 - prob_buy_given_signal_L) * EU_L_given_signal_L
     
-    # Expected utility overall, considering the probability of each signal
-    EU_total <- (prob_Y_H * EU_optimal_given_signal_H) + 
-      (prob_Y_L * EU_optimal_given_signal_L) - 
+    # Expected utility overall
+    EU_total <- (prob_Y_H * EU_principal_given_signal_H) + 
+      (prob_Y_L * EU_principal_given_signal_L) - 
       lambda * mutual_info_bernoulli(p, r)
   }
   
@@ -134,11 +130,26 @@ total_utility <- function(r, lambda, w) {
 }
 
 # Social Welfare Function
-social_welfare <- function(r, lambda, w) {
-  total_utility(r, lambda, w) + total_profit(r, lambda, w)
+social_welfare <- function(r, lambda, w, beta_sensitivity) {
+  total_utility(r, lambda, w, beta_sensitivity) + total_profit(r, lambda, w, beta_sensitivity)
 }
 
-
+# Optimization for r* given lambda and w (Principal's best response)
+optimal_r <- function(lambda, w, beta_sensitivity) {
+  # If UH - epsilon < w, the principal's utility is fixed at epsilon,
+  # regardless of r. In this case, the principal would choose r=0.5
+  # to minimize the cost of information (as mutual_info(p, 0.5) = 0).
+  if (UH - epsilon < w) {
+    return(0.5) 
+  } else {
+    obj <- function(r_val) -total_utility(r_val, lambda, w, beta_sensitivity)
+    # Optimize over a range of r values.
+    # The range is from 0.5 + eps to 1 - eps to avoid log(0) and ensure valid precision.
+    # If the optimum is exactly 0.5, this range will find it if it's the boundary.
+    opt <- optimize(obj, c(0.5 + eps, 1 - eps))
+    return(opt$minimum)
+  }
+}
 
 # UI
 ui <- fluidPage(
@@ -146,9 +157,15 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       h4("Grid and Parameter Controls"),
-   
+      sliderInput("lambda_range", "λ Range",
+                  min = 0, max = 100, value = c(0.01, 1), step = 0.01),
+      sliderInput("w_range", "w Range",
+                  min = 0, max = 100, value = c(0.01, 5), step = 0.01),
       numericInput("grid_size", "Grid Points per Axis",
                    value = 50, min = 10, max = 500, step = 10),
+      # New slider for beta_sensitivity
+      sliderInput("beta_sensitivity", "β (Sensitivity of Buying Decision)",
+                  min = 0.1, max = 20, value = 1, step = 0.1),
       helpText("Note: Increasing the grid size may slow down calculations.")
     ),
     mainPanel(
@@ -179,30 +196,14 @@ ui <- fluidPage(
 
 # SERVER
 server <- function(input, output) {
-  # Optimization for r* given lambda and w (Principal's best response)
-  optimal_r <- function(lambda, w) {
-    # If UH - epsilon < w, the principal's utility is fixed at epsilon,
-    # regardless of r. In this case, the principal would choose r=0.5
-    # to minimize the cost of information (as mutual_info(p, 0.5) = 0).
-    if (UH - epsilon < w|lambda==0.3) {
-      return(0.5) 
-    } else {
-      obj <- function(r_val) -total_utility(r_val, lambda, w)
-      # Optimize over a range of r values.
-      # The range is from 0.5 + eps to 1 - eps to avoid log(0) and ensure valid precision.
-      # If the optimum is exactly 0.5, this range will find it if it's the boundary.
-      opt <- optimize(obj, c(0.5 + eps, 1 - eps))
-      return(opt$minimum)
-    }
-  }
   
   # Reactive grid parameters for PLOTTING RANGES AND COMPUTATIONS
-  lambda_seq <-  reactive({
-    seq(lambda_range[1], lambda_range[2], length.out = input$grid_size)
+  lambda_seq <- reactive({
+    seq(input$lambda_range[1], input$lambda_range[2], length.out = input$grid_size)
   })
   
-  w_seq <-  reactive({
-    seq(w_range[1], w_range[2], length.out = input$grid_size)
+  w_seq <- reactive({
+    seq(input$w_range[1], input$w_range[2], length.out = input$grid_size)
   })
   
   r_seq <- reactive({
@@ -212,13 +213,13 @@ server <- function(input, output) {
   
   # Principal's best response surface
   grid_data <- reactive({
-    req(lambda_seq(), w_seq()) # Now using lambda_seq and w_seq for computations
+    req(lambda_seq(), w_seq(), input$beta_sensitivity) # Add beta_sensitivity to requirements
     expand.grid(lambda = lambda_seq(), w = w_seq()) %>%
       distinct() %>%
       rowwise() %>%
       mutate(
-        r_star = optimal_r(lambda, w),
-        profit = total_profit(r_star, lambda, w)
+        r_star = optimal_r(lambda, w, input$beta_sensitivity), # Pass beta_sensitivity
+        profit = total_profit(r_star, lambda, w, input$beta_sensitivity) # Pass beta_sensitivity
       ) %>%
       ungroup()
   })
@@ -248,12 +249,12 @@ server <- function(input, output) {
   
   # Agent's best response curve (calculates over finite lambda/w ranges)
   optimal_values_r <- reactive({
-    req(lambda_seq(), w_seq(), r_seq()) # Now using lambda_seq and w_seq for computations
+    req(lambda_seq(), w_seq(), r_seq(), input$beta_sensitivity) # Add beta_sensitivity
     
     result <- lapply(r_seq(), function(r_val) {
       grid <- expand.grid(lambda = lambda_seq(), w = w_seq()) %>%
         distinct()
-      grid$Pbuy <- mapply(P_buy, r = r_val, w = grid$w)
+      grid$Pbuy <- mapply(P_buy, r = r_val, w = grid$w, beta_sensitivity = input$beta_sensitivity) # Pass beta_sensitivity
       grid$profit <- grid$w * grid$Pbuy + grid$lambda * mutual_info_bernoulli(p, r_val)
       
       # Find all rows that maximize profit for this r_val
@@ -288,7 +289,7 @@ server <- function(input, output) {
     df_opt <- optimal_values_r()
     df_utility <- df_opt %>%
       rowwise() %>%
-      mutate(utility = total_utility(r, lambda_star, w_star)) %>%
+      mutate(utility = total_utility(r, lambda_star, w_star, input$beta_sensitivity)) %>% # Pass beta_sensitivity
       ungroup()
     
     max_utility_value <- max(df_utility$utility)
@@ -307,13 +308,13 @@ server <- function(input, output) {
   
   # Nash Equilibrium calculation and plot
   nash_data <- reactive({
-    req(r_seq())
+    req(r_seq(), input$beta_sensitivity) # Add beta_sensitivity
     agent_br <- optimal_values_r() # Agent's best response, now with finite values
     
     nash_df <- agent_br %>%
       rowwise() %>%
       mutate(
-        principal_best_r = optimal_r(lambda_star, w_star), # lambda_star and w_star are always finite
+        principal_best_r = optimal_r(lambda_star, w_star, input$beta_sensitivity), # Pass beta_sensitivity
         is_nash = abs(r - principal_best_r) < 0.005 # Tolerance for Nash equilibrium
       ) %>%
       ungroup()
@@ -367,7 +368,7 @@ server <- function(input, output) {
   
   # Social Optimum Calculation (calculates over finite lambda/w ranges)
   social_optimum <- reactive({
-    req(r_seq(), lambda_seq(), w_seq()) # Now using lambda_seq and w_seq for computations
+    req(r_seq(), lambda_seq(), w_seq(), input$beta_sensitivity) # Add beta_sensitivity
     
     # Create a 3D grid for all parameters
     full_grid <- expand.grid(
@@ -381,7 +382,8 @@ server <- function(input, output) {
     full_grid$social_welfare <- mapply(social_welfare,
                                        r = full_grid$r,
                                        lambda = full_grid$lambda,
-                                       w = full_grid$w)
+                                       w = full_grid$w,
+                                       beta_sensitivity = input$beta_sensitivity) # Pass beta_sensitivity
     
     # Find all rows with the maximum social welfare
     max_welfare <- max(full_grid$social_welfare)
@@ -392,6 +394,7 @@ server <- function(input, output) {
   
   # Agent First scenario calculation (Agent maximizes profit, Principal reacts with optimal r)
   agent_first_optimum <- reactive({
+    req(input$beta_sensitivity) # Add beta_sensitivity
     df_opt <- optimal_values_r() # This now contains finite values
     max_profit_agent_value <- max(df_opt$profit_agent)
     max_profit_points <- df_opt %>%
@@ -408,7 +411,7 @@ server <- function(input, output) {
   
   # Summary table
   summary_data <- reactive({
-    req(nash_data(), social_optimum(), agent_first_optimum())
+    req(nash_data(), social_optimum(), agent_first_optimum(), input$beta_sensitivity) # Add beta_sensitivity
     
     summary_rows <- list()
     
@@ -471,10 +474,10 @@ server <- function(input, output) {
     summary_df_calculated <- summary_df %>%
       rowwise() %>%
       mutate(
-        P_buy = P_buy(r, w),
-        Utility_Principal = total_utility(r, lambda, w),
-        Profit_Agent = total_profit(r, lambda, w),
-        Total_Welfare = social_welfare(r, lambda, w)
+        P_buy = P_buy(r, w, input$beta_sensitivity), # Pass beta_sensitivity
+        Utility_Principal = total_utility(r, lambda, w, input$beta_sensitivity), # Pass beta_sensitivity
+        Profit_Agent = total_profit(r, lambda, w, input$beta_sensitivity), # Pass beta_sensitivity
+        Total_Welfare = social_welfare(r, lambda, w, input$beta_sensitivity) # Pass beta_sensitivity
       ) %>%
       ungroup() %>%
       mutate(
