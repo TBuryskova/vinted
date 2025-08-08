@@ -4,6 +4,7 @@ library(ggplot2)
 library(dplyr)
 library(purrr) # Added to load the map_df function
 library(tidyr) # Added for pivot_longer
+library(plotly) # Added for the 3D plot
 
 # --- Model primitives ---
 
@@ -69,106 +70,80 @@ Social_Welfare <- function(r, c, kappa, UH, UL, R, beta) {
 # --- UI ---
 ui <- fluidPage(
   titlePanel("Rational Inattention – Firm Profit Maximization"),
-  tabsetPanel(
-    tabPanel("Firm Acts First",
-             sidebarLayout(
-               sidebarPanel(
-                 h4("Consumer's Parameters"),
-                 sliderInput("UH", "Utility High (UH):", min = 0, max = 10, value = 5, step = 0.5),
-                 sliderInput("UL", "Utility Low (UL):", min = 0, max = 10, value = 0, step = 0.5),
-                 sliderInput("R", "Reservation payoff (R):", min = 0, max = 10, value = 2.5, step = 0.5),
-                 hr(),
-                 h4("Firm's Choice Parameters"),
-                 sliderInput("c_range", "Cost Range (c):", min = 0, max = 10, value = c(0, 5), step = 0.5),
-                 sliderInput("k_range", "Kappa Range (k):", min = 0, max = 10, value = c(0, 5), step = 0.5),
-                 sliderInput("steps", "Grid steps:", min = 10, max = 100, value = 25, step = 1)
-               ),
-               mainPanel(
-                 h3("Firm's Profit Heatmap"),
+  
+  # A single sidebarLayout that will contain all the shared sliders
+  sidebarLayout(
+    sidebarPanel(
+      h4("Shared Parameters"),
+      sliderInput("UH", "Utility High (UH):", min = 0, max = 10, value = 10, step = 0.5),
+      sliderInput("UL", "Utility Low (UL):", min = 0, max = 10, value = 0, step = 0.5),
+      sliderInput("R", "Reservation payoff (R):", min = 0, max = 10, value = 5, step = 0.5),
+      sliderInput("beta", "Beta (β):", min = 0, max = 5, value = 1, step = 0.5),
+      hr(),
+      h4("Optimization Ranges"),
+      sliderInput("c_range", "Cost Range (c):", min = 0, max = 50, value = c(0, 50), step = 1),
+      sliderInput("k_range", "Kappa Range (k):", min = 0, max = 50, value = c(0, 50), step = 1),
+      sliderInput("r_range", "r Range (r):", min = 0.5, max = 1, value = c(0.5, 1), step = 0.01),
+      hr(),
+      sliderInput("steps", "Grid steps:", min = 10, max = 100, value = 50, step = 1),
+      # New slider to control the number of points on the Pareto frontier
+      sliderInput("pareto_points", "Pareto Frontier Points:", min = 5, max = 50, value = 20, step = 1)
+    ),
+    
+    # The main panel contains the tabbed layout for all scenarios
+    mainPanel(
+      tabsetPanel(
+        tabPanel("Firm First",
+                 h3("Firm's Profit"),
                  plotOutput("heat_profit", height = "400px"),
                  hr(),
                  h3("Optimal Solution"),
                  textOutput("optimal_solution")
-               )
-             )
-    ),
-    tabPanel("Backward Induction",
-             sidebarLayout(
-               sidebarPanel(
-                 h4("Consumer's Parameters"),
-                 sliderInput("UH_cf", "Utility High (UH):", min = 0, max = 10, value = 5, step = 0.5),
-                 sliderInput("UL_cf", "Utility Low (UL):", min = 0, max = 10, value = 0, step = 0.5),
-                 sliderInput("R_cf", "Reservation payoff (R):", min = 0, max = 10, value = 0.5, step = 0.5),
-                 hr(),
-                 h4("Firm's Best Response Parameters"),
-                 sliderInput("r_range_cf", "Consumer's r range:", min = 0.5, max = 1, value = c(0.5, 1), step = 0.01),
-                 sliderInput("c_range_cf", "Firm's c range:", min = 1, max = 10, value = c(1, 5), step = 0.5),
-                 sliderInput("k_range_cf", "Firm's kappa range:", min = 0, max = 10, value = c(1, 5), step = 0.5),
-                 sliderInput("steps_cf", "Grid steps:", min = 10, max = 50, value = 25, step = 1)
-               ),
-               mainPanel(
+        ),
+        tabPanel("User first",
                  h3("Firm's Best Response Functions"),
                  plotOutput("best_response_plot", height = "400px"),
                  hr(),
                  h3("Equilibrium Solution (Backward Induction)"),
                  textOutput("optimal_response_cf")
-               )
-             )
-    ),
-    tabPanel("Iterative Best Responses",
-             sidebarLayout(
-               sidebarPanel(
-                 h4("Simulation Parameters"),
-                 p("Initial Cost (c): 2"),
-                 p("Initial Kappa (κ): 2"),
-                 p("Number of Iterations: 10")
-               ),
-               mainPanel(
+        ),
+        tabPanel("Nash Equilibrium",
                  h3("Best Response Dynamics"),
                  plotOutput("iterative_plot", height = "400px"),
                  hr(),
                  h3("Equilibrium Values"),
                  textOutput("equilibrium_values")
-               )
-             )
-    ),
-    tabPanel("Social Planner",
-             sidebarLayout(
-               sidebarPanel(
-                 h4("Social Planner Parameters"),
-                 sliderInput("UH_sp", "Utility High (UH):", min = 0, max = 10, value = 5, step = 0.5),
-                 sliderInput("UL_sp", "Utility Low (UL):", min = 0, max = 10, value = 0, step = 0.5),
-                 sliderInput("R_sp", "Reservation payoff (R):", min = 0, max = 10, value = 0.5, step = 0.5),
-                 hr(),
-                 h4("Optimization Ranges"),
-                 sliderInput("c_range_sp", "Cost Range (c):", min = 0, max = 10, value = c(0, 5), step = 0.5),
-                 sliderInput("k_range_sp", "Kappa Range (k):", min = 0, max = 10, value = c(0, 5), step = 0.5),
-                 sliderInput("r_range_sp", "r Range (r):", min = 0.5, max = 1, value = c(0.5, 1), step = 0.01),
-                 sliderInput("steps_sp", "Grid steps:", min = 10, max = 50, value = 25, step = 1)
-               ),
-               mainPanel(
+        ),
+        tabPanel("Social Planner",
                  h3("Social Planner's Optimal Solution"),
                  textOutput("social_planner_solution"),
                  hr(),
                  h3("Social Welfare at Optimum"),
                  textOutput("social_welfare_value")
-               )
-             )
-    ),
-    tabPanel("Summary of All Scenarios",
-             mainPanel(
-               h3("Comparison of Optimal Outcomes"),
-               tableOutput("all_scenarios_summary")
-             )
+        ),
+        tabPanel("Constrained Social Planner",
+                 h3("Constrained Social Planner's Optimal Solution"),
+                 textOutput("constrained_social_planner_solution"),
+                 hr(),
+                 h3("Social Welfare at Optimum"),
+                 textOutput("constrained_social_welfare_value")
+        ),
+        tabPanel("Summary of All Scenarios",
+                 h3("Comparison of Optimal Outcomes"),
+                 tableOutput("all_scenarios_summary"),
+                 hr(),
+                 h3("3D Visualization of Scenarios"),
+                 plotlyOutput("summary_plot", height = "600px")
+        )
+      )
     )
   )
 )
 
 # --- Server ---
 server <- function(input, output, session) {
-  beta <- 2
   
-  # --- Firm Acts First Tab Logic ---
+  # --- Firm First Tab Logic ---
   firm_sweep_data <- reactive({
     c_vals <- seq(input$c_range[1], input$c_range[2], length.out = input$steps)
     k_vals <- seq(input$k_range[1], input$k_range[2], length.out = input$steps)
@@ -176,10 +151,10 @@ server <- function(input, output, session) {
     expand.grid(c = c_vals, kappa = k_vals) %>%
       rowwise() %>%
       mutate(
-        sol_consumer = list(optimize(function(r) -U_r(r, input$UH, input$UL, c, beta, input$R, kappa),
+        sol_consumer = list(optimize(function(r) -U_r(r, input$UH, input$UL, c, input$beta, input$R, kappa),
                                      interval = c(0.5, 1), maximum = FALSE)),
         r_star = sol_consumer$minimum,
-        profit = Firm_Profit(r_star, c, kappa, input$UH, input$UL, input$R, beta)
+        profit = Firm_Profit(r_star, c, kappa, input$UH, input$UL, input$R, input$beta)
       ) %>%
       select(-sol_consumer) %>%
       ungroup()
@@ -210,14 +185,15 @@ server <- function(input, output, session) {
   
   # --- Backward Induction Tab Logic ---
   backward_induction_data <- reactive({
-    r_vals <- seq(input$r_range_cf[1], input$r_range_cf[2], length.out = input$steps_cf)
-    c_vals <- seq(input$c_range_cf[1], input$c_range_cf[2], length.out = input$steps_cf)
-    k_vals <- seq(input$k_range_cf[1], input$k_range_cf[2], length.out = input$steps_cf)
+    # Now using the consolidated sliders
+    r_vals <- seq(input$r_range[1], input$r_range[2], length.out = input$steps)
+    c_vals <- seq(input$c_range[1], input$c_range[2], length.out = input$steps)
+    k_vals <- seq(input$k_range[1], input$k_range[2], length.out = input$steps)
     
     # This function finds the firm's best response (c*, kappa*) for a given r
     firm_best_response <- function(r) {
       grid <- expand.grid(c = c_vals, kappa = k_vals)
-      grid$profit <- Firm_Profit(r, grid$c, grid$kappa, input$UH_cf, input$UL_cf, input$R_cf, beta)
+      grid$profit <- Firm_Profit(r, grid$c, grid$kappa, input$UH, input$UL, input$R, input$beta)
       best_firm_response <- grid[which.max(grid$profit), ]
       return(best_firm_response)
     }
@@ -229,7 +205,7 @@ server <- function(input, output, session) {
       c_star <- firm_sol$c
       k_star <- firm_sol$kappa
       
-      consumer_utility <- U_r(r, input$UH_cf, input$UL_cf, c_star, beta, input$R_cf, k_star)
+      consumer_utility <- U_r(r, input$UH, input$UL, c_star, input$beta, input$R, k_star)
       
       data.frame(r = r,
                  c_star = c_star,
@@ -279,8 +255,8 @@ server <- function(input, output, session) {
   iterative_results <- reactive({
     
     # Fixed initial values and iterations
-    c_current <- 2
-    k_current <- 2
+    c_current <- input$c_range[1]
+    k_current <- input$k_range[1]
     iterations <- 10
     
     # Create empty data frame to store results
@@ -288,14 +264,14 @@ server <- function(input, output, session) {
     
     for (i in 1:iterations) {
       # Consumer's Best Response to current firm parameters
-      r_new_opt <- optimize(function(r) -U_r(r, 5, 0, c_current, beta, 0.5, k_current),
+      r_new_opt <- optimize(function(r) -U_r(r, input$UH, input$UL, c_current, input$beta, input$R, k_current),
                             interval = c(0.5, 1), maximum = FALSE)
       r_new <- r_new_opt$minimum
       
       # Firm's Best Response to new consumer parameter
-      firm_profit_grid <- expand.grid(c = seq(0, 10, length.out = 100),
-                                      kappa = seq(0, 10, length.out = 100))
-      firm_profit_grid$profit <- Firm_Profit(r_new, firm_profit_grid$c, firm_profit_grid$kappa, 5, 0, 0.5, beta)
+      firm_profit_grid <- expand.grid(c = seq(input$c_range[1], input$c_range[2], length.out = input$steps),
+                                      kappa = seq(input$k_range[1], input$k_range[2], length.out = input$steps))
+      firm_profit_grid$profit <- Firm_Profit(r_new, firm_profit_grid$c, firm_profit_grid$kappa, input$UH, input$UL, input$R, input$beta)
       
       best_firm_response <- firm_profit_grid[which.max(firm_profit_grid$profit), ]
       c_new <- best_firm_response$c
@@ -340,13 +316,13 @@ server <- function(input, output, session) {
   
   # --- Social Planner Tab Logic ---
   social_planner_results <- reactive({
-    c_vals <- seq(input$c_range_sp[1], input$c_range_sp[2], length.out = input$steps_sp)
-    k_vals <- seq(input$k_range_sp[1], input$k_range_sp[2], length.out = input$steps_sp)
-    r_vals <- seq(input$r_range_sp[1], input$r_range_sp[2], length.out = input$steps_sp)
+    c_vals <- seq(input$c_range[1], input$c_range[2], length.out = input$steps)
+    k_vals <- seq(input$k_range[1], input$k_range[2], length.out = input$steps)
+    r_vals <- seq(input$r_range[1], input$r_range[2], length.out = input$steps)
     
     grid <- expand.grid(c = c_vals, kappa = k_vals, r = r_vals)
     
-    grid$welfare <- Social_Welfare(grid$r, grid$c, grid$kappa, input$UH_sp, input$UL_sp, input$R_sp, beta)
+    grid$welfare <- Social_Welfare(grid$r, grid$c, grid$kappa, input$UH, input$UL, input$R, input$beta)
     
     best_solution <- grid[which.max(grid$welfare), ]
     
@@ -366,7 +342,104 @@ server <- function(input, output, session) {
     paste0("The maximum social welfare is: ", round(sol$welfare, 2))
   })
   
+  # --- Constrained Social Planner Logic ---
+  constrained_social_planner_results <- reactive({
+    c_vals <- seq(input$c_range[1], input$c_range[2], length.out = input$steps)
+    k_vals <- seq(input$k_range[1], input$k_range[2], length.out = input$steps)
+    
+    expand.grid(c = c_vals, kappa = k_vals) %>%
+      rowwise() %>%
+      mutate(
+        # Consumer's optimal r for the given (c, kappa)
+        sol_consumer = list(optimize(function(r) -U_r(r, input$UH, input$UL, c, input$beta, input$R, kappa),
+                                     interval = c(0.5, 1), maximum = FALSE)),
+        r_star = sol_consumer$minimum,
+        # Calculate social welfare for this (c, kappa, r*) combination
+        welfare = Social_Welfare(r_star, c, kappa, input$UH, input$UL, input$R, input$beta)
+      ) %>%
+      select(-sol_consumer) %>%
+      ungroup()
+  })
+  
+  constrained_social_planner_solution <- reactive({
+    data <- constrained_social_planner_results()
+    data[which.max(data$welfare),]
+  })
+  
+  output$constrained_social_planner_solution <- renderText({
+    sol <- constrained_social_planner_solution()
+    paste0("The constrained social planner's optimal choices are:\n",
+           "  - Optimal Cost (c*): ", round(sol$c, 2), "\n",
+           "  - Optimal Kappa (κ*): ", round(sol$kappa, 2))
+  })
+  
+  output$constrained_social_welfare_value <- renderText({
+    sol <- constrained_social_planner_solution()
+    paste0("The consumer's optimal response is:\n",
+           "  - Optimal Signal Precision (r*): ", round(sol$r_star, 2), "\n",
+           "Leading to a maximum social welfare of: ", round(sol$welfare, 2))
+  })
+  
+  # --- Pareto Frontier Logic ---
+  pareto_frontier_data <- reactive({
+    lambda_vals <- seq(0, 1, length.out = input$pareto_points)
+    
+    # Define a grid for search
+    c_vals <- seq(input$c_range[1], input$c_range[2], length.out = 20)
+    k_vals <- seq(input$k_range[1], input$k_range[2], length.out = 20)
+    r_vals <- seq(input$r_range[1], input$r_range[2], length.out = 20)
+    
+    map_df(lambda_vals, function(lambda) {
+      grid <- expand.grid(r = r_vals, c = c_vals, kappa = k_vals)
+      
+      # Calculate the weighted sum for each point in the grid
+      grid$profit <- Firm_Profit(grid$r, grid$c, grid$kappa, input$UH, input$UL, input$R, input$beta)
+      grid$utility <- U_r(grid$r, input$UH, input$UL, grid$c, input$beta, input$R, grid$kappa)
+      grid$weighted_sum <- lambda * grid$profit + (1 - lambda) * grid$utility
+      
+      # Find the point that maximizes the weighted sum
+      best_point <- grid[which.max(grid$weighted_sum), ]
+      
+      data.frame(
+        Scenario = "Pareto Optimal",
+        r = best_point$r,
+        c = best_point$c,
+        kappa = best_point$kappa,
+        Profit = best_point$profit,
+        Utility = best_point$utility
+      )
+    })
+  })
+  
   # --- Summary of All Scenarios ---
+  summary_data_table <- reactive({
+    firm_sol <- firm_first_summary()
+    bi_sol <- backward_induction_summary()
+    iter_sol <- iterative_summary()
+    sp_sol <- social_planner_summary()
+    constrained_sp_sol <- constrained_social_planner_summary()
+    
+    data.frame(
+      Scenario = c(firm_sol$Scenario, bi_sol$Scenario, iter_sol$Scenario, sp_sol$Scenario, constrained_sp_sol$Scenario),
+      r = c(firm_sol$r, bi_sol$r, iter_sol$r, sp_sol$r, constrained_sp_sol$r),
+      c = c(firm_sol$c, bi_sol$c, iter_sol$c, sp_sol$c, constrained_sp_sol$c),
+      kappa = c(firm_sol$kappa, bi_sol$kappa, iter_sol$kappa, sp_sol$kappa, constrained_sp_sol$kappa),
+      Profit = c(firm_sol$profit, bi_sol$profit, iter_sol$profit, sp_sol$profit, constrained_sp_sol$profit),
+      Utility = c(firm_sol$utility, bi_sol$utility, iter_sol$utility, sp_sol$utility, constrained_sp_sol$utility),
+      Welfare = c(firm_sol$welfare, bi_sol$welfare, iter_sol$welfare, sp_sol$welfare, constrained_sp_sol$welfare)
+    )
+  })
+  
+  # This reactive expression is specifically for the plot, so we can combine the data here
+  summary_data_plot <- reactive({
+    pareto_data <- pareto_frontier_data() %>%
+      mutate(Welfare = Profit + Utility) %>%
+      select(Scenario, r, c, kappa, Profit, Utility, Welfare)
+    
+    summary_data_table() %>%
+      bind_rows(pareto_data)
+  })
+  
   firm_first_summary <- reactive({
     sol <- firm_optimal_solution()
     r_star <- sol$r_star
@@ -374,13 +447,14 @@ server <- function(input, output, session) {
     k_star <- sol$kappa
     
     list(
+      Scenario = "Firm First",
       r = r_star,
       c = c_star,
       kappa = k_star,
-      p_buy = P_buy(r_star, input$UH, input$UL, c_star, beta, input$R),
+      p_buy = P_buy(r_star, input$UH, input$UL, c_star, input$beta, input$R),
       profit = sol$profit,
-      utility = U_r(r_star, input$UH, input$UL, c_star, beta, input$R, k_star),
-      welfare = Social_Welfare(r_star, c_star, k_star, input$UH, input$UL, input$R, beta)
+      utility = U_r(r_star, input$UH, input$UL, c_star, input$beta, input$R, k_star),
+      welfare = Social_Welfare(r_star, c_star, k_star, input$UH, input$UL, input$R, input$beta)
     )
   })
   
@@ -391,13 +465,14 @@ server <- function(input, output, session) {
     k_star <- sol$k_star
     
     list(
+      Scenario = "User First",
       r = r_star,
       c = c_star,
       kappa = k_star,
-      p_buy = P_buy(r_star, input$UH_cf, input$UL_cf, c_star, beta, input$R_cf),
-      profit = Firm_Profit(r_star, c_star, k_star, input$UH_cf, input$UL_cf, input$R_cf, beta),
+      p_buy = P_buy(r_star, input$UH, input$UL, c_star, input$beta, input$R),
+      profit = Firm_Profit(r_star, c_star, k_star, input$UH, input$UL, input$R, input$beta),
       utility = sol$consumer_utility,
-      welfare = Social_Welfare(r_star, c_star, k_star, input$UH_cf, input$UL_cf, input$R_cf, beta)
+      welfare = Social_Welfare(r_star, c_star, k_star, input$UH, input$UL, input$R, input$beta)
     )
   })
   
@@ -408,13 +483,14 @@ server <- function(input, output, session) {
     k_val <- final_state$kappa
     
     list(
+      Scenario = "Nash Equilibrium",
       r = r_val,
       c = c_val,
       kappa = k_val,
-      p_buy = P_buy(r_val, 5, 0, c_val, beta, 0.5),
-      profit = Firm_Profit(r_val, c_val, k_val, 5, 0, 0.5, beta),
-      utility = U_r(r_val, 5, 0, c_val, beta, 0.5, k_val),
-      welfare = Social_Welfare(r_val, c_val, k_val, 5, 0, 0.5, beta)
+      p_buy = P_buy(r_val, input$UH, input$UL, c_val, input$beta, input$R),
+      profit = Firm_Profit(r_val, c_val, k_val, input$UH, input$UL, input$R, input$beta),
+      utility = U_r(r_val, input$UH, input$UL, c_val, input$beta, input$R, k_val),
+      welfare = Social_Welfare(r_val, c_val, k_val, input$UH, input$UL, input$R, input$beta)
     )
   })
   
@@ -425,34 +501,78 @@ server <- function(input, output, session) {
     k_star <- sol$kappa
     
     list(
+      Scenario = "Social Planner",
       r = r_star,
       c = c_star,
       kappa = k_star,
-      p_buy = P_buy(r_star, input$UH_sp, input$UL_sp, c_star, beta, input$R_sp),
-      profit = Firm_Profit(r_star, c_star, k_star, input$UH_sp, input$UL_sp, input$R_sp, beta),
-      utility = U_r(r_star, input$UH_sp, input$UL_sp, c_star, beta, input$R_sp, k_star),
+      p_buy = P_buy(r_star, input$UH, input$UL, c_star, input$beta, input$R),
+      profit = Firm_Profit(r_star, c_star, k_star, input$UH, input$UL, input$R, input$beta),
+      utility = U_r(r_star, input$UH, input$UL, c_star, input$beta, input$R, k_star),
       welfare = sol$welfare
     )
   })
   
-  output$all_scenarios_summary <- renderTable({
-    firm_sol <- firm_first_summary()
-    bi_sol <- backward_induction_summary()
-    iter_sol <- iterative_summary()
-    sp_sol <- social_planner_summary()
+  constrained_social_planner_summary <- reactive({
+    sol <- constrained_social_planner_solution()
+    r_star <- sol$r_star
+    c_star <- sol$c
+    k_star <- sol$kappa
     
-    data.frame(
-      Scenario = c("Firm Acts First", "Backward Induction", "Iterative Best Responses", "Social Planner"),
-      `r*` = c(firm_sol$r, bi_sol$r, iter_sol$r, sp_sol$r),
-      `c*` = c(firm_sol$c, bi_sol$c, iter_sol$c, sp_sol$c),
-      `κ*` = c(firm_sol$kappa, bi_sol$kappa, iter_sol$kappa, sp_sol$kappa),
-      `P(buy)` = c(firm_sol$p_buy, bi_sol$p_buy, iter_sol$p_buy, sp_sol$p_buy),
-      `Profit` = c(firm_sol$profit, bi_sol$profit, iter_sol$profit, sp_sol$profit),
-      `Utility` = c(firm_sol$utility, bi_sol$utility, iter_sol$utility, sp_sol$utility),
-      `Welfare` = c(firm_sol$welfare, bi_sol$welfare, iter_sol$welfare, sp_sol$welfare)
-    ) %>%
-      mutate(across(where(is.numeric), ~round(.x, 2)))
+    list(
+      Scenario = "Constrained Social Planner",
+      r = r_star,
+      c = c_star,
+      kappa = k_star,
+      p_buy = P_buy(r_star, input$UH, input$UL, c_star, input$beta, input$R),
+      profit = Firm_Profit(r_star, c_star, k_star, input$UH, input$UL, input$R, input$beta),
+      utility = U_r(r_star, input$UH, input$UL, c_star, input$beta, input$R, k_star),
+      welfare = sol$welfare
+    )
+  })
+  
+  
+  output$all_scenarios_summary <- renderTable({
+    summary_data_table() %>%
+      mutate(across(where(is.numeric), ~round(.x, 2))) %>%
+      rename("r*" = "r", "c*" = "c", "κ*" = "kappa")
   }, striped = TRUE, bordered = TRUE, rownames = FALSE, digits = 2, sanitize.text.function = function(x) x)
+  
+  output$summary_plot <- renderPlotly({
+    data <- summary_data_plot()
+    
+    # Separate the Pareto points for a distinct style
+    pareto_data <- data %>% filter(Scenario == "Pareto Optimal")
+    scenario_data <- data %>% filter(Scenario != "Pareto Optimal")
+    
+    # Start the plot with the main scenario points
+    p <- plot_ly(scenario_data, x = ~r, y = ~c, z = ~kappa, color = ~Scenario,
+                 text = ~paste("Scenario: ", Scenario,
+                               "<br>r: ", round(r, 2),
+                               "<br>c: ", round(c, 2),
+                               "<br>κ: ", round(kappa, 2),
+                               "<br>Profit: ", round(Profit, 2),
+                               "<br>Utility: ", round(Utility, 2),
+                               "<br>Welfare: ", round(Welfare, 2)),
+                 hoverinfo = "text",
+                 marker = list(size = 10)) %>%
+      add_markers()
+    
+    # Add the Pareto points with a different color and marker type
+    p <- p %>% add_markers(data = pareto_data, x = ~r, y = ~c, z = ~kappa,
+                           marker = list(color = "black", symbol = "diamond", size = 5),
+                           name = "Pareto Optimal",
+                           text = ~paste("Pareto Optimal",
+                                         "<br>r: ", round(r, 2),
+                                         "<br>c: ", round(c, 2),
+                                         "<br>κ: ", round(kappa, 2),
+                                         "<br>Profit: ", round(Profit, 2),
+                                         "<br>Utility: ", round(Utility, 2)),
+                           hoverinfo = "text")
+    
+    p %>% layout(scene = list(xaxis = list(title = "r"),
+                              yaxis = list(title = "c"),
+                              zaxis = list(title = "κ")))
+  })
 }
 
 shinyApp(ui, server)
