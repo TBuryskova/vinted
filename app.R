@@ -11,6 +11,28 @@ pB <- function(x, y) {
            (2 * cosh(1 / y) - (exp(x / y) + exp(-x / y))))
 }
 
+
+pB_H <- function(w, lambda) {
+  C  <- cosh(1 / lambda)
+  X  <- exp(w / lambda)
+  pB_val <- (C - X) / (2 * C - (X + 1/X))
+  clamp <- function(z) pmin(pmax(z, 1e-12), 1 - 1e-12)
+  pB_val <- clamp(pB_val)
+  qH <- 1 / (1 + ((1 - pB_val) / pB_val) * exp(-(1 - w) / lambda))
+  clamp(qH)
+}
+
+pB_L <- function(w, lambda) {
+  C  <- cosh(1 / lambda)
+  X  <- exp(w / lambda)
+  pB_val <- (C - X) / (2 * C - (X + 1/X))
+  clamp <- function(z) pmin(pmax(z, 1e-12), 1 - 1e-12)
+  pB_val <- clamp(pB_val)
+  qL <- 1 / (1 + ((1 - pB_val) / pB_val) * exp((1 + w) / lambda))
+  clamp(qL)
+}
+
+
 u_fun <- function(w, lambda) {
   C  <- cosh(1 / lambda)
   X  <- exp(w / lambda)
@@ -120,22 +142,21 @@ server <- function(input, output, session) {
     opt_row <- df[which.max(df$a_val), ]
     w <- opt_row$x
     lambda <- opt_row$y
-    a_val <- a_fun(w, lambda, input$a_def)
-    
     list(
       chosen_definition = input$a_def,
       optimal_point = c(x = w, y = lambda),
-      a_xy = a_val,
-      pB_xy = pB(w, lambda),
+      pB_H_xy = pB_H(w, lambda),
+      pB_L_xy = pB_L(w, lambda),
       u_xy = u_fun(w, lambda),
       I_xy = I_RI(w, lambda),
-      V_xy = V_RI(w, lambda)
+      V_xy = V_RI(w, lambda),
+      welfare = V_RI(w,lambda)+pB(w, lambda) * w + I_RI(w, lambda) * lambda
     )
   })
   
   # Summary table for all definitions
   output$summary_table <- renderTable({
-    defs <- c("def1", "def2", "def3","def4","def5")
+    defs <- c("def1", "def2", "def3", "def4", "def5")
     xs <- seq(input$xrange[1], input$xrange[2], length.out = input$res)
     ys <- seq(input$yrange[1], input$yrange[2], length.out = input$res)
     grid <- expand.grid(x = xs, y = ys)
@@ -150,15 +171,19 @@ server <- function(input, output, session) {
         w_opt = w,
         lambda_opt = lambda,
         a_xy = a_fun(w, lambda, def),
-        pB_xy = pB(w, lambda),
+        pB_H_xy = pB_H(w, lambda),
+        pB_L_xy = pB_L(w, lambda),
         u_xy = u_fun(w, lambda),
         I_xy = I_RI(w, lambda),
-        V_xy = V_RI(w, lambda)
+        V_xy = V_RI(w, lambda),
+        welfare = V_RI(w,lambda)+pB(w, lambda) * w + I_RI(w, lambda) * lambda
       )
     })
     
     do.call(rbind, res_list)
   }, digits = 4)
 }
+
+
 
 shinyApp(ui, server)
