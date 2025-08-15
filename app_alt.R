@@ -77,21 +77,15 @@ pB_L <- function(w, lambda) {
 
 # Mapping definition labels
 def_labels <- c(
-  "Fee only",
   "Fee + info",
-  "Info only",
   "User",
   "Social planner"
 )
 
 # Objective definitions
 a_fun <- function(w, lambda, def) {
-  if (def == "Fee only") {
-    return(pB(w, lambda) * w)
-  } else if (def == "Fee + info") {
+  if (def == "Fee + info") {
     return(I_RI(w, lambda) * lambda)
-  } else if (def == "Info only") {
-    return(pB(w, lambda) * w + I_RI(w, lambda) * lambda)
   } else if (def == "User") {
     return(V_RI(w, lambda))
   } else if (def == "Social planner") {
@@ -106,12 +100,12 @@ ui <- fluidPage(
     sidebarPanel(
       sliderInput("w", "Choose w", min = 0, max = 1, value = 0.5, step = 0.1),
       sliderInput("lambda_range", "Lambda range", min = 0.01, max = 2, value = c(0.01, 1), step = 0.01),
-      selectInput("profit_def", "Profit Definition", 
+      selectInput("profit_def", "Profit Definition",
                   choices = def_labels, selected = def_labels[1]),
       numericInput("res", "Resolution (points)", value = 200, min = 10, max = 500, step = 10)
     ),
     mainPanel(
-      h4("Summary Table: Max over λ for chosen profit definition"),
+      h4("Summary Table: Max over λ for all definitions"),
       tableOutput("summary_table"),
       plotOutput("plot_probs"),
       plotOutput("plot_profits")
@@ -190,7 +184,5 @@ server <- function(input, output, session) {
       theme_minimal()
   })
 }
-
-shinyApp(ui, server)
 
 shinyApp(ui, server)
