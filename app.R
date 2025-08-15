@@ -89,10 +89,10 @@ ui <- fluidPage(
                   selected = "def1")
     ),
     mainPanel(
+            h4("Summary Table for All Definitions"),
       tableOutput("summary_table"),
       plotOutput("plot_a"),
-      verbatimTextOutput("opt_results"),
-      h4("Summary Table for All Definitions"),
+      verbatimTextOutput("opt_results")
     )
   )
 )
