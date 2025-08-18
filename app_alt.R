@@ -85,7 +85,7 @@ def_labels <- c(
 # Objective definitions
 a_fun <- function(w, lambda, def) {
   if (def == "Fee + info") {
-    return(I_RI(w, lambda) * lambda)
+    return(w*pB(w, lambda)+I_RI(w, lambda) * lambda)
   } else if (def == "User") {
     return(V_RI(w, lambda))
   } else if (def == "Social planner") {
@@ -147,13 +147,14 @@ server <- function(input, output, session) {
       data.frame(
         Definition = chosen_def,
         lambda_opt = l_opt,
-        profit_max = a_fun(w, l_opt, chosen_def),
+        profit_max = pB(w, l_opt)*w+l_opt*I_RI(w,l_opt),
         pB = pB(w, l_opt),
         pB_H = pB_H(w, l_opt),
         pB_L = pB_L(w, l_opt),
         u = u_fun(w, l_opt),
         I_RI = I_RI(w, l_opt),
         V_RI = V_RI(w, l_opt),
+        welfare = V_RI(w, l_opt)+pB(w, l_opt)*w+l_opt*I_RI(w,l_opt),
         stringsAsFactors = FALSE
       )
     })
