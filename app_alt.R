@@ -76,11 +76,7 @@ pB_L <- function(w, lambda) {
 }
 
 # Mapping definition labels
-def_labels <- c(
-  "Fee + info",
-  "User",
-  "Social planner"
-)
+def_labels <- c("Fee + info", "User", "Social planner")
 
 # Objective definitions
 a_fun <- function(w, lambda, def) {
@@ -93,6 +89,17 @@ a_fun <- function(w, lambda, def) {
   }
 }
 
+# --- FOC ---
+FOC_val <- function(w, lambda) {
+  eps <- 1e-5
+  if(w<lambda*log(cosh(1/lambda))) {
+  dpB <- (pB(w, lambda+eps)-pB(w, lambda-eps))/(2*eps)
+  dMI <- (I_RI(w, lambda+eps)-I_RI(w, lambda-eps))/(2*eps)
+  dpB*w + lambda*dMI + I_RI(w, lambda) } else
+  {0}
+
+}
+
 # --- UI ---
 ui <- fluidPage(
   titlePanel("Optimization over λ for Given w"),
@@ -100,15 +107,16 @@ ui <- fluidPage(
     sidebarPanel(
       sliderInput("w", "Choose w", min = 0, max = 1, value = 0.5, step = 0.1),
       sliderInput("lambda_range", "Lambda range", min = 0.01, max = 2, value = c(0.01, 1), step = 0.01),
-      selectInput("profit_def", "Profit Definition",
-                  choices = def_labels, selected = def_labels[1]),
+      checkboxGroupInput("profit_defs", "Profit Definitions",
+                         choices = def_labels, selected = def_labels),
       numericInput("res", "Resolution (points)", value = 200, min = 10, max = 500, step = 10)
     ),
     mainPanel(
       h4("Summary Table: Max over λ for all definitions"),
       tableOutput("summary_table"),
       plotOutput("plot_probs"),
-      plotOutput("plot_profits")
+      plotOutput("plot_profits"),
+      plotOutput("plot_foc")
     )
   )
 )
@@ -129,18 +137,18 @@ server <- function(input, output, session) {
       pB_H = pB_H(w, lambdas),
       pB_L = pB_L(w, lambdas),
       profit_vals,
-      check.names = FALSE  # keep spaces in names
+      check.names = FALSE
     )
   })
   
-  # Table: λ* for all definitions
+  # Table
   output$summary_table <- renderTable({
     df <- lambda_data()
     w <- input$w
     
     results_list <- lapply(def_labels, function(chosen_def) {
       vals <- df[[chosen_def]]
-      if (length(vals) == 0) return(NULL) # Handle cases where a column might be missing
+      if (length(vals) == 0) return(NULL)
       i_max <- which.max(vals)
       l_opt <- df$lambda[i_max]
       
@@ -159,7 +167,6 @@ server <- function(input, output, session) {
       )
     })
     
-    # Combine the list of data frames into a single data frame
     do.call(rbind, results_list)
     
   }, digits = 4)
@@ -177,13 +184,41 @@ server <- function(input, output, session) {
   
   output$plot_profits <- renderPlot({
     df <- lambda_data()
-    df_long <- pivot_longer(df, cols = all_of(def_labels), names_to = "Definition", values_to = "Profit")
+    selected_defs <- input$profit_defs
+    df_long <- pivot_longer(df, cols = all_of(selected_defs), names_to = "Definition", values_to = "Profit")
     ggplot(df_long, aes(x = lambda, y = Profit, color = Definition)) +
       geom_line(linewidth = 1) +
       labs(y = "Profit", color = "Definition",
-           title = paste("Profit for all definitions, w =", input$w)) +
+           title = paste("Profit for selected definitions, w =", input$w)) +
+      theme_minimal() +
+      theme(legend.position="bottom")
+  })
+  
+  # Plot FOC zero locus in (w, lambda), keep only bottom branch (maxima)
+  output$plot_foc <- renderPlot({
+    w_grid <- seq(0.01, 1, length.out = 300)
+    lambda_grid <- seq(input$lambda_range[1], input$lambda_range[2], length.out = 300)
+    
+    foc_df <- expand.grid(w = w_grid, lambda = lambda_grid)
+    foc_df$FOC <- Vectorize(FOC_val)(foc_df$w, foc_df$lambda)
+    
+    tol <- 0.01 # stricter tolerance for root
+    foc_df <- foc_df %>% filter((FOC) < tol & FOC>0)
+    
+    # Keep only bottom branch (local maxima): for each w, pick the lowest lambda root
+    foc_branch <- foc_df %>%
+      group_by(w) %>%
+      summarise(lambda = min(lambda, na.rm = TRUE), .groups = "drop") %>%
+      filter(!is.infinite(lambda) & !is.nan(lambda))
+    
+    ggplot(foc_branch) +
+      geom_line(color = "red", linewidth = 1, aes(x = w, y = lambda)) +
+      xlim(0,1) +
+      labs(title = "Optimal λ*", x = "w", y = "λ*") +
       theme_minimal()
   })
+  
+  
 }
 
 shinyApp(ui, server)
