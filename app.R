@@ -2,54 +2,48 @@ library(shiny)
 library(ggplot2)
 library(dplyr)
 
-# --- Helper Functions ---
+# --- Helper Functions (same as before) ---
 pB <- function(x, y) {
   if(y==0) {
     if(x>=1) {
-  return(0)} else {
-    return((1-x)*0.5)
-  }
-  } else{
-  threshold <- y * log(cosh(1 / y))
-  pB <- ifelse(abs(x) >= threshold,
-         ifelse(x > 0, 0, 1),
-         (cosh(1 / y) - exp(x / y)) /
-           (2 * cosh(1 / y) - (exp(x / y) + exp(-x / y))))
-  return(pB)
+      return(0)
+    } else {
+      return((1-x)*0.5)
+    }
+  } else {
+    threshold <- y * log(cosh(1 / y))
+    pB <- ifelse(abs(x) >= threshold,
+                 ifelse(x > 0, 0, 1),
+                 (cosh(1 / y) - exp(x / y)) /
+                   (2 * cosh(1 / y) - (exp(x / y) + exp(-x / y))))
+    return(pB)
   }
 }
 
-# pB_H function: calculates qH, the conditional probability of a positive outcome given the observer has a high observation.
 pB_H <- function(w, lambda) {
   C  <- cosh(1 / lambda)
   X  <- exp(w / lambda)
   pB_val <- (C - X) / (2 * C - (X + 1/X))
-  # Clamp to avoid numerical issues
   clamp <- function(z) pmin(pmax(z, 1e-12), 1 - 1e-12)
   pB_val <- clamp(pB_val)
   qH <- 1 / (1 + ((1 - pB_val) / pB_val) * exp(-(1 - w) / lambda))
   min(clamp(qH),1,na.rm=TRUE)
 }
 
-# pB_L function: calculates qL, the conditional probability of a positive outcome given the observer has a low observation.
 pB_L <- function(w, lambda) {
   C  <- cosh(1 / lambda)
   X  <- exp(w / lambda)
   pB_val <- (C - X) / (2 * C - (X + 1/X))
-  # Clamp to avoid numerical issues
   clamp <- function(z) pmin(pmax(z, 1e-12), 1 - 1e-12)
   pB_val <- clamp(pB_val)
   qL <- 1 / (1 + ((1 - pB_val) / pB_val) * exp((1 + w) / lambda))
   max(clamp(qL),0,na.rm=TRUE)
 }
 
-# u_fun: a utility function, now with correct handling of lambda = 0
 u_fun <- function(w, lambda) {
   if (lambda == 0) {
-    # Special case for lambda = 0
     return(0.5 * (1 - w))
   } else {
-    # Calculations for lambda != 0
     C <- cosh(1 / lambda)
     X <- exp(w / lambda)
     kc <- (X * C - 1) / (X * (C - X))
@@ -70,10 +64,8 @@ u_fun <- function(w, lambda) {
   }
 }
 
-# I_RI: a function that calculates information rent
 I_RI <- function(w, lambda) {
   if (lambda == 0) {
-    # Special case for lambda = 0
     return(0.5 * (1 - w))
   } else {
     C  <- cosh(1 / lambda)
@@ -81,8 +73,6 @@ I_RI <- function(w, lambda) {
     threshold <- lambda * log(cosh(1 / lambda))
     
     pB_val <- (C - X) / (2 * C - (X + 1/X))
-    
-    # Clamp to avoid NaNs
     clamp <- function(z) pmin(pmax(z, 1e-12), 1 - 1e-12)
     pB_val <- clamp(pB_val)
     
@@ -102,12 +92,10 @@ I_RI <- function(w, lambda) {
   }
 }
 
-# V_RI: a function for user's value
 V_RI <- function(w, lambda) {
   u_fun(w, lambda) - lambda * I_RI(w, lambda)
 }
 
-# a_fun: a function to choose which a(x,y) definition to use
 a_fun <- function(x, y, def) {
   if (def == "def1") {
     if(y==0) {
@@ -143,9 +131,8 @@ ui <- fluidPage(
       tableOutput("summary_table"),
       plotOutput("plot_a"),
       plotOutput("plot_buy"),
+      plotOutput("schematic_plot"),
       plotOutput("plot_util"),
-      
-      # New plot for welfare heatmap
       plotOutput("plot_welfare")
     )
   )
@@ -158,63 +145,52 @@ server <- function(input, output, session) {
     xs <- seq(input$xrange[1], input$xrange[2], length.out = input$res)
     ys <- seq(input$yrange[1], input$yrange[2], length.out = input$res)
     
-    # Calculate all necessary values in one go
     grid <- expand.grid(x = xs, y = ys) %>%
       mutate(
         a_val = mapply(a_fun, x, y, MoreArgs = list(def = input$a_def)),
         welfare = mapply(function(w, lambda) {
-          V_RI(w, lambda) + pB(w, lambda) * w + I_RI(w, lambda) * lambda
+          V_RI(w,lambda) + pB(w, lambda) * w + I_RI(w, lambda) * lambda
         }, x, y),
         util = mapply(V_RI, x, y),
         pBuy = mapply(pB, x, y)
       )
-    
     return(grid)
   })
   
-  output$plot_a <- renderPlot({
-    ggplot(grid_data(), aes(x = x, y = y, fill = a_val)) +
-      geom_tile() +
-      scale_fill_viridis_c(option = "plasma") +
-      labs(fill = "profit", x="w", y="lambda", title = paste("Profit as a function of w and lambda")) +
+  # helper for bw contour plot
+  bw_contour_plot <- function(df, zvar, fill_label, title) {
+    ggplot(df, aes(x = x, y = y, z = !!sym(zvar))) +
+      geom_contour_filled(bins = 15) +
+      scale_fill_grey(start = 1, end = 0) +
+      labs(fill = fill_label, x="w", y="lambda", title = title) +
       theme_minimal()
+  }
+  
+  output$plot_a <- renderPlot({
+    bw_contour_plot(grid_data(), "a_val", "profit", "Profit as a function of w and lambda")
   })
   
   output$plot_buy <- renderPlot({
-    df=grid_data()
-    
-    ggplot(df, aes(x = x, y = y, fill = pBuy)) +
-      geom_tile() +
-      scale_fill_viridis_c(option = "plasma") +
-      labs(fill = "pBuy", x="w", y="lambda", title = paste("pBuy as a function of w and lambda")) +
-      theme_minimal()
+    bw_contour_plot(grid_data(), "pBuy", "pBuy", "pBuy as a function of w and lambda")
   })
   
   output$plot_util <- renderPlot({
-    df=grid_data()
-    
-    ggplot(df, aes(x = x, y = y, fill = util)) +
-      geom_tile() +
-      scale_fill_viridis_c(option = "plasma") +
-      labs(fill = "util", x="w", y="lambda", title = paste("User utility as a function of w and lambda")) +
-      theme_minimal()
+    bw_contour_plot(grid_data(), "util", "util", "User utility as a function of w and lambda")
   }) 
   
-  # New plot output for welfare heatmap
   output$plot_welfare <- renderPlot({
-    # Get the data from the reactive expression
+    bw_contour_plot(grid_data(), "welfare", "Welfare", "Welfare as a function of w and lambda")
+  })
+  
+  output$schematic_plot <- renderPlot({
     df <- grid_data()
-
-    ggplot(df, aes(x = x, y = y, fill = welfare)) +
-      geom_tile() +
-      # Add a point to show the maximum welfare location
-      geom_point(aes(x = 1, y = 0), color = "red", size = 5, shape = 4, inherit.aes = FALSE) +
-      scale_fill_viridis_c(option = "viridis") + # Using a different color scale for visual distinction
-      labs(fill = "Welfare", x="w", y="lambda", title = "Welfare as a function of w and lambda") +
+    ggplot(df, aes(x = x, y = y, z = pBuy)) +
+      geom_contour_filled(breaks = seq(0, 0.5, by = 0.05)) +
+      scale_fill_grey(start = 1, end = 0) +
+      labs(title = "Schematic: pBuy contours", x = "w", y = "lambda", fill = "pBuy") +
       theme_minimal()
   })
   
-  # Summary table for all definitions
   output$summary_table <- renderTable({
     defs <- c("def1", "def4", "def5")
     xs <- seq(input$xrange[1], input$xrange[2], length.out = input$res)
@@ -226,8 +202,6 @@ server <- function(input, output, session) {
       opt_row <- grid[which.max(grid$a_val), ]
       w <- opt_row$x
       lambda <- opt_row$y
-      
-      # Calculate welfare for the optimal point
       welfare_val <- V_RI(w,lambda) + pB(w, lambda) * w + I_RI(w, lambda) * lambda
       
       data.frame(
@@ -243,7 +217,6 @@ server <- function(input, output, session) {
         welfare = welfare_val
       )
     })
-    
     do.call(rbind, res_list)
   }, digits = 4)
 }
