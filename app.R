@@ -128,7 +128,7 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       sliderInput("xrange", "X range", min = 0, max = 2, value = c(0, 1), step = 0.05),
-      sliderInput("yrange", "Y range", min = 0, max = 2, value = c(0.00001, 1), step = 0.05),
+      sliderInput("yrange", "Y range", min = 0, max = 2, value = c(0, 1), step = 0.05),
       numericInput("res", "Resolution (grid points per axis)", value = 200, min = 10, max = 200, step = 5),
       selectInput("a_def", "Choose a(x,y) definition",
                   choices = list(
@@ -142,6 +142,9 @@ ui <- fluidPage(
       h4("Summary Table"),
       tableOutput("summary_table"),
       plotOutput("plot_a"),
+      plotOutput("plot_buy"),
+      plotOutput("plot_util"),
+      
       # New plot for welfare heatmap
       plotOutput("plot_welfare")
     )
@@ -161,7 +164,9 @@ server <- function(input, output, session) {
         a_val = mapply(a_fun, x, y, MoreArgs = list(def = input$a_def)),
         welfare = mapply(function(w, lambda) {
           V_RI(w, lambda) + pB(w, lambda) * w + I_RI(w, lambda) * lambda
-        }, x, y)
+        }, x, y),
+        util = mapply(V_RI, x, y),
+        pBuy = mapply(pB, x, y)
       )
     
     return(grid)
@@ -174,6 +179,26 @@ server <- function(input, output, session) {
       labs(fill = "profit", x="w", y="lambda", title = paste("Profit as a function of w and lambda")) +
       theme_minimal()
   })
+  
+  output$plot_buy <- renderPlot({
+    df=grid_data()
+    
+    ggplot(df, aes(x = x, y = y, fill = pBuy)) +
+      geom_tile() +
+      scale_fill_viridis_c(option = "plasma") +
+      labs(fill = "pBuy", x="w", y="lambda", title = paste("pBuy as a function of w and lambda")) +
+      theme_minimal()
+  })
+  
+  output$plot_util <- renderPlot({
+    df=grid_data()
+    
+    ggplot(df, aes(x = x, y = y, fill = util)) +
+      geom_tile() +
+      scale_fill_viridis_c(option = "plasma") +
+      labs(fill = "util", x="w", y="lambda", title = paste("User utility as a function of w and lambda")) +
+      theme_minimal()
+  }) 
   
   # New plot output for welfare heatmap
   output$plot_welfare <- renderPlot({
